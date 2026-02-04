@@ -258,50 +258,54 @@ Display::Display(const int display_number,
   SDL_Rect bounds;
   check_sdl(SDL_GetDisplayUsableBounds(display_number, &bounds) == 0, "get display usable bounds");
 
-  if (!fit_window_to_usable_bounds) {
-    if (std::get<0>(window_size) < 0 && std::get<1>(window_size) < 0) {
-      window_width = auto_width;
-      window_height = auto_height;
-    } else {
-      if (std::get<0>(window_size) < 0) {
-        window_height = std::get<1>(window_size);
-        window_width = static_cast<float>(auto_width) / static_cast<float>(auto_height) * window_height;
-      } else if (std::get<1>(window_size) < 0) {
-        window_width = std::get<0>(window_size);
-        window_height = static_cast<float>(auto_height) / static_cast<float>(auto_width) * window_width;
-      } else {
-        window_width = std::get<0>(window_size);
-        window_height = std::get<1>(window_size);
-      }
-    }
+  const bool user_specified_window_size = (std::get<0>(window_size) >= 0 || std::get<1>(window_size) >= 0);
+
+  // 目标：初始化窗口尽量按视频分辨率（像素）来建，避免为了“放进可用区域”而缩放导致模糊。
+  // 只有当用户显式传了 -W（window_size）时，才按用户尺寸/等比推导。
+  if (!user_specified_window_size) {
+    window_width = auto_width;
+    window_height = auto_height;
 
     window_x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
     window_y = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
-
-    if (high_dpi_allowed_) {
-      window_width /= 2;
-      window_height /= 2;
-    }
   } else {
-    const int usable_width = std::max(bounds.w - border_width, min_width);
-    const int usable_height = std::max(bounds.h - border_height, min_height);
-
-    const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
-    const float usable_aspect_ratio = static_cast<float>(usable_width) / static_cast<float>(usable_height);
-
-    if (usable_aspect_ratio > aspect_ratio) {
-      window_height = usable_height;
-      window_width = static_cast<int>(window_height * aspect_ratio);
+    if (std::get<0>(window_size) < 0) {
+      window_height = std::get<1>(window_size);
+      window_width = static_cast<float>(auto_width) / static_cast<float>(auto_height) * window_height;
+    } else if (std::get<1>(window_size) < 0) {
+      window_width = std::get<0>(window_size);
+      window_height = static_cast<float>(auto_height) / static_cast<float>(auto_width) * window_width;
     } else {
-      window_width = usable_width;
-      window_height = static_cast<int>(window_width / aspect_ratio);
+      window_width = std::get<0>(window_size);
+      window_height = std::get<1>(window_size);
     }
 
-    window_x = bounds.x + (usable_width - window_width + border_width) / 2;
-    window_y = bounds.y + (usable_height - window_height + border_height) / 2 + border_width;
+    if (fit_window_to_usable_bounds) {
+      const int usable_width = std::max(bounds.w - border_width, min_width);
+      const int usable_height = std::max(bounds.h - border_height, min_height);
+
+      const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
+
+      if (window_width > usable_width || window_height > usable_height) {
+        // 保持窗口比例不变，压到可用区域里
+        if (static_cast<float>(usable_width) / static_cast<float>(usable_height) > aspect_ratio) {
+          window_height = usable_height;
+          window_width = static_cast<int>(window_height * aspect_ratio);
+        } else {
+          window_width = usable_width;
+          window_height = static_cast<int>(window_width / aspect_ratio);
+        }
+      }
+
+      window_x = bounds.x + (usable_width - window_width + border_width) / 2;
+      window_y = bounds.y + (usable_height - window_height + border_height) / 2 + border_width;
 #ifdef __linux__
-    window_y -= 2 * border_width + 4;
+      window_y -= 2 * border_width + 4;
 #endif
+    } else {
+      window_x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
+      window_y = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
+    }
   }
 
   if (window_width < min_width) {
@@ -311,7 +315,7 @@ Display::Display(const int display_number,
     throw std::runtime_error{"Window height cannot be less than " + std::to_string(min_height)};
   }
 
-  const int create_window_flags = SDL_WINDOW_SHOWN;
+  const int create_window_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
   window_ = check_sdl(SDL_CreateWindow(format_window_title(left_file_name, right_file_name).c_str(), window_x, window_y, window_width, window_height, high_dpi_allowed_ ? create_window_flags | SDL_WINDOW_ALLOW_HIGHDPI : create_window_flags),
                       "window");
 
@@ -337,6 +341,12 @@ Display::Display(const int display_number,
 
   SDL_GL_GetDrawableSize(window_, &drawable_width_, &drawable_height_);
   SDL_GetWindowSize(window_, &window_width_, &window_height_);
+
+  // macOS HiDPI/显示缩放（更多空间/更大字体）下：
+  // - window size 是 points
+  // - drawable size 是 pixels
+  // 不能用 drawable 覆盖 window（会把 points/pixels 混在一起，导致宽高/坐标/缩放链路错乱，出现松手后模糊）。
+  // 正确做法：保持 window_* 为 points，只用 drawable/window 计算渲染 scale。
 
   // Check if window is larger than display and warn user
   const int usable_width = bounds.w - border_width;
@@ -375,7 +385,9 @@ Display::Display(const int display_number,
   pan_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
   selection_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
 
-  SDL_RenderSetLogicalSize(renderer_, drawable_width_, drawable_height_);
+  // Keep renderer logical coordinates in WINDOW points; use renderer scale to map to drawable pixels on HiDPI.
+  SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
+  SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
 
   auto create_video_texture = [&](const std::string& scale_quality) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, scale_quality.c_str());
@@ -2481,6 +2493,35 @@ void Display::handle_event(const SDL_Event& event) {
           if (event_.window.windowID == SDL_GetWindowID(window_)) {
             quit_ = true;
           }
+          break;
+        }
+        case SDL_WINDOWEVENT_SIZE_CHANGED:
+        case SDL_WINDOWEVENT_RESIZED: {
+          // Window was resized: refresh scaling factors so drawing and mouse mapping stay correct
+          SDL_GL_GetDrawableSize(window_, &drawable_width_, &drawable_height_);
+          SDL_GetWindowSize(window_, &window_width_, &window_height_);
+
+          drawable_to_window_width_factor_ = static_cast<float>(drawable_width_) / static_cast<float>(window_width_);
+          drawable_to_window_height_factor_ = static_cast<float>(drawable_height_) / static_cast<float>(window_height_);
+          video_to_window_width_factor_ = static_cast<float>(video_width_) / static_cast<float>(window_width_) * ((mode_ == Mode::HSTACK) ? 2.F : 1.F);
+          video_to_window_height_factor_ = static_cast<float>(video_height_) / static_cast<float>(window_height_) * ((mode_ == Mode::VSTACK) ? 2.F : 1.F);
+
+          font_scale_ = (drawable_to_window_width_factor_ + drawable_to_window_height_factor_) / 2.0F;
+          border_extension_ = 3 * font_scale_;
+          double_border_extension_ = border_extension_ * 2;
+          line2_y_ = line1_y_ + 30 * font_scale_;
+
+          if (mode_ != Mode::VSTACK) {
+            max_text_width_ = drawable_width_ / 2 - double_border_extension_ - line1_y_;
+          } else {
+            max_text_width_ = drawable_width_ - double_border_extension_ - line1_y_;
+          }
+
+          // Important: keep renderer logical coordinates in WINDOW points, not drawable pixels.
+          // Otherwise SDL will apply an extra scale step on HiDPI displays, which often ends up
+          // as a non-integer resample after the resize gesture ends (blurry output).
+          SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
+          SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
           break;
         }
         case SDL_WINDOWEVENT_LEAVE:
