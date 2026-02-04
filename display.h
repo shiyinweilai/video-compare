@@ -215,6 +215,9 @@ class Display {
   int middle_y_;
   int max_text_width_;
 
+  SDL_Rect viewport_rect_;
+  void update_viewport();
+
   std::string pending_message_;
   std::chrono::milliseconds message_shown_at_;
   SDL_Texture* message_texture_{nullptr};
@@ -280,10 +283,15 @@ class Display {
   inline int static round(const float value) { return static_cast<int>(std::round(value)); }
 
   SDL_FRect video_rect_to_drawable_transform(const SDL_FRect& rect) const {
-    const float width_scale = 1.0f / video_to_window_width_factor_;
-    const float height_scale = 1.0f / video_to_window_height_factor_;
+    float total_video_w = static_cast<float>(video_width_);
+    float total_video_h = static_cast<float>(video_height_);
 
-    return {rect.x * width_scale, rect.y * height_scale, rect.w * width_scale, rect.h * height_scale};
+    if (mode_ == Mode::HSTACK) total_video_w *= 2.0f;
+    if (mode_ == Mode::VSTACK) total_video_h *= 2.0f;
+
+    const float scale = static_cast<float>(viewport_rect_.w) / total_video_w;
+
+    return {viewport_rect_.x + rect.x * scale, viewport_rect_.y + rect.y * scale, rect.w * scale, rect.h * scale};
   }
 
   void render_text(int x, int y, SDL_Texture* texture, int texture_width, int texture_height, int border_extension, bool left_adjust);

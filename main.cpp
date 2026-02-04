@@ -469,6 +469,7 @@ int main(int argc, char** argv) {
          {"show-controls", {"-c", "--show-controls"}, "print controls and exit", 0},
          {"verbose", {"-v", "--verbose"}, "enable verbose output, including information such as library versions and rendering details", 0},
          {"high-dpi", {"-d", "--high-dpi"}, "allow high DPI mode for e.g. displaying UHD content on Retina displays", 0},
+         {"no-high-dpi", {"--no-high-dpi"}, "disable high DPI mode (default on non-macOS systems)", 0},
          {"10-bpc", {"-b", "--10-bpc"}, "use 10 bits per color component instead of 8", 0},
          {"fast-alignment", {"-F", "--fast-alignment"}, "toggle fast bilinear scaling for aligning input source resolutions, replacing high-quality bicubic and chroma-accurate interpolation", 0},
          {"bilinear-texture", {"-I", "--bilinear-texture"}, "toggle bilinear video texture interpolation, replacing nearest-neighbor filtering", 0},
@@ -551,7 +552,19 @@ int main(int argc, char** argv) {
 
       config.verbose = args["verbose"];
       config.fit_window_to_usable_bounds = args["window-fit-display"];
-      config.high_dpi_allowed = args["high-dpi"];
+      
+      if (args["high-dpi"]) {
+        config.high_dpi_allowed = true;
+      } else if (args["no-high-dpi"]) {
+        config.high_dpi_allowed = false;
+      } else {
+#ifdef __APPLE__
+        config.high_dpi_allowed = true;
+#else
+        config.high_dpi_allowed = false;
+#endif
+      }
+
       config.use_10_bpc = args["10-bpc"];
       config.fast_input_alignment = args["fast-alignment"];
       config.bilinear_texture_filtering = args["bilinear-texture"];

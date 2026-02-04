@@ -366,15 +366,15 @@ Display::Display(const int display_number,
 
   font_scale_ = (drawable_to_window_width_factor_ + drawable_to_window_height_factor_) / 2.0F;
 
-  border_extension_ = 3;
+  border_extension_ = static_cast<int>(3 * font_scale_);
   double_border_extension_ = border_extension_ * 2;
-  line1_y_ = 20;
-  line2_y_ = line1_y_ + 30;
+  line1_y_ = static_cast<int>(20 * font_scale_);
+  line2_y_ = line1_y_ + static_cast<int>(30 * font_scale_);
 
   if (mode_ != Mode::VSTACK) {
-    max_text_width_ = window_width_ / 2 - double_border_extension_ - line1_y_;
+    max_text_width_ = drawable_width_ / 2 - double_border_extension_ - line1_y_;
   } else {
-    max_text_width_ = window_width_ - double_border_extension_ - line1_y_;
+    max_text_width_ = drawable_width_ - double_border_extension_ - line1_y_;
   }
 
   SDL_RWops* embedded_font = check_sdl(SDL_RWFromConstMem(SOURCE_CODE_PRO_REGULAR_TTF, SOURCE_CODE_PRO_REGULAR_TTF_LEN), "get pointer to font");
@@ -387,7 +387,7 @@ Display::Display(const int display_number,
 
   // Keep renderer logical coordinates in WINDOW points; use renderer scale to map to drawable pixels on HiDPI.
   // SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
-  SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
+  // SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
 
   auto create_video_texture = [&](const std::string& scale_quality) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, scale_quality.c_str());
@@ -454,18 +454,40 @@ Display::Display(const int display_number,
   TTF_SetFontStyle(big_font_, TTF_STYLE_NORMAL);
   add_help_texture(small_font_, " ");
 
-  for (auto& key_description_pair : get_controls()) {
-    primary_color = !primary_color;
-    add_help_texture(small_font_, string_sprintf(" %-12s %s", key_description_pair.first.c_str(), key_description_pair.second.c_str()));
-  }
-
-  add_help_texture(big_font_, " ");
-
   for (auto& text : get_instructions()) {
     primary_color = !primary_color;
     add_help_texture(small_font_, text);
     add_help_texture(small_font_, " ");
   }
+
+  update_viewport();
+}
+
+void Display::update_viewport() {
+  float window_aspect = static_cast<float>(drawable_width_) / drawable_height_;
+  float video_aspect = static_cast<float>(video_width_) / video_height_;
+
+  if (mode_ == Mode::HSTACK) {
+    video_aspect *= 2.0f;
+  } else if (mode_ == Mode::VSTACK) {
+    video_aspect /= 2.0f;
+  }
+
+  int w, h;
+  if (window_aspect > video_aspect) {
+    // Window is wider than video (pillarbox)
+    h = drawable_height_;
+    w = static_cast<int>(h * video_aspect);
+  } else {
+    // Window is taller than video (letterbox)
+    w = drawable_width_;
+    h = static_cast<int>(w / video_aspect);
+  }
+
+  viewport_rect_.w = w;
+  viewport_rect_.h = h;
+  viewport_rect_.x = (drawable_width_ - w) / 2;
+  viewport_rect_.y = (drawable_height_ - h) / 2;
 }
 
 Display::~Display() {
@@ -954,25 +976,14 @@ void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_
 }
 
 void Display::render_text(const int x, const int y, SDL_Texture* texture, const int texture_width, const int texture_height, const int border_extension, const bool left_adjust) {
-  // Scale down the texture dimensions from physical pixels to logical points
-  const int logical_width = static_cast<int>(texture_width / font_scale_);
-  const int logical_height = static_cast<int>(texture_height / font_scale_);
-  
   // compute clip amount which ensures the filename does not extend more than half the display width
-  const int clip_amount = std::max((logical_width + double_border_extension_) - max_text_width_, 0);
-  const int gradient_amount = std::min(clip_amount, 24);
+  const int clip_amount = std::max((texture_width + double_border_extension_) - max_text_width_, 0);
+  const int gradient_amount = std::min(clip_amount, static_cast<int>(24 * font_scale_));
 
-  SDL_Rect fill_rect = {x - border_extension + gradient_amount, y - border_extension, logical_width + double_border_extension_ - clip_amount - gradient_amount, logical_height + double_border_extension_};
+  SDL_Rect fill_rect = {x - border_extension + gradient_amount, y - border_extension, texture_width + double_border_extension_ - clip_amount - gradient_amount, texture_height + border_extension * 2};
 
-  // src_rect uses physical pixels (texture coordinates)
-  // We need to scale clip_amount and gradient_amount back to physical pixels for src_rect
-  const int phys_clip = static_cast<int>(clip_amount * font_scale_);
-  const int phys_gradient = static_cast<int>(gradient_amount * font_scale_);
-  
-  SDL_Rect src_rect = {phys_clip + phys_gradient, 0, texture_width - phys_clip - phys_gradient, texture_height};
-  
-  // text_rect uses logical points (window coordinates)
-  SDL_Rect text_rect = {x + gradient_amount, y, logical_width - clip_amount - gradient_amount, logical_height};
+  SDL_Rect src_rect = {clip_amount + gradient_amount, 0, texture_width - clip_amount - gradient_amount, texture_height};
+  SDL_Rect text_rect = {x + gradient_amount, y, texture_width - clip_amount - gradient_amount, texture_height};
 
   if (!left_adjust && (mode_ != Mode::VSTACK)) {
     fill_rect.x += clip_amount;
@@ -996,38 +1007,17 @@ void Display::render_text(const int x, const int y, SDL_Texture* texture, const 
     fill_rect.x--;
     fill_rect.w = 1;
 
-    // For gradient, we need to be careful with scaling. 
-    // Simulating pixel-by-pixel gradient in logical coordinates might be tricky.
-    // Let's stick to logical steps.
-    
-    // Adjust src_rect and text_rect for the loop
-    // We need to step back in logical coordinates, which means stepping back multiple pixels in texture
-    
-    for (int i = (gradient_amount - 1); i >= 0; i--) {
-      fill_rect.x--;
+    src_rect.x--;
+    src_rect.w = 1;
+    text_rect.x--;
+    text_rect.w = 1;
+
+    for (int i = (gradient_amount - 1); i >= 0; i--, fill_rect.x--, src_rect.x--, text_rect.x--) {
       SDL_SetRenderDrawColor(renderer_, draw_color_r, draw_color_g, draw_color_b, draw_color_a * i / gradient_amount);
       SDL_RenderFillRect(renderer_, &fill_rect);
 
-      // For the text part, we shift the logical destination x
-      text_rect.x--;
-      
-      // And we shift the source x. Since src is physical, we shift by font_scale_
-      // This is an approximation, but should look okay for the gradient fade
-      src_rect.x -= static_cast<int>(font_scale_);
-      src_rect.w += static_cast<int>(font_scale_); // Expand width to cover the shift? 
-      // Actually, the original code was: src_rect.x--, src_rect.w=1. It was drawing 1 pixel wide slices.
-      // To replicate this with scaling:
-      
-      SDL_Rect slice_src = src_rect;
-      slice_src.x = static_cast<int>((clip_amount + i) * font_scale_);
-      slice_src.w = static_cast<int>(font_scale_); // Grab a chunk corresponding to 1 logical point
-      if (slice_src.w < 1) slice_src.w = 1;
-      
-      SDL_Rect slice_dst = text_rect;
-      slice_dst.w = 1; // 1 logical point wide
-
       SDL_SetTextureAlphaMod(texture, alpha_mod * i / gradient_amount);
-      SDL_RenderCopy(renderer_, texture, &slice_src, &slice_dst);
+      SDL_RenderCopy(renderer_, texture, &src_rect, &text_rect);
     }
 
     // reset
@@ -1038,15 +1028,15 @@ void Display::render_text(const int x, const int y, SDL_Texture* texture, const 
 
 void Display::render_progress_dots(const float position, const float progress, const bool is_top) {
   if (duration_ > 0) {
-    const float dot_size = 2.f;
+    const float dot_size = 2.f * font_scale_;
 
     const int dot_width = std::round(dot_size);
     const int dot_height = std::round(dot_size);
 
-    const int y_offset = is_top ? 1 : window_height_ - 1 - dot_height;
+    const int y_offset = is_top ? 1 : drawable_height_ - 1 - dot_height;
 
-    const int x_position = std::round(position * window_width_ / duration_);
-    const int x_progress = std::round(progress * window_width_ / duration_);
+    const int x_position = std::round(position * drawable_width_ / duration_);
+    const int x_progress = std::round(progress * drawable_width_ / duration_);
 
     for (int x = 0; x < x_position; x++) {
       if (x % (2 * dot_width) < dot_width) {
@@ -1342,13 +1332,12 @@ void Display::render_help() {
     int w, h;
     SDL_QueryTexture(help_textures_[i], nullptr, nullptr, &w, &h);
 
-    int logical_w = static_cast<int>(w / font_scale_);
-    int logical_h = static_cast<int>(h / font_scale_);
+    int phys_x = static_cast<int>(HELP_TEXT_HORIZONTAL_MARGIN * font_scale_);
 
-    SDL_Rect screen_area = {HELP_TEXT_HORIZONTAL_MARGIN, y, logical_w, logical_h};
+    SDL_Rect screen_area = {phys_x, y, w, h};
     SDL_RenderCopy(renderer_, help_textures_[i], nullptr, &screen_area);
 
-    y += logical_h + HELP_TEXT_LINE_SPACING;
+    y += h + static_cast<int>(HELP_TEXT_LINE_SPACING * font_scale_);
   }
 }
 
@@ -1359,34 +1348,31 @@ void Display::render_metadata_overlay() {
   SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 3 / 2);
   SDL_RenderFillRect(renderer_, nullptr);
 
-  const int table_width = window_width_ - HELP_TEXT_HORIZONTAL_MARGIN * 2;
-  const int table_x = HELP_TEXT_HORIZONTAL_MARGIN;
+  const int phys_table_width = drawable_width_ - static_cast<int>(HELP_TEXT_HORIZONTAL_MARGIN * 2 * font_scale_);
+  const int phys_table_x = static_cast<int>(HELP_TEXT_HORIZONTAL_MARGIN * font_scale_);
 
   // Calculate the starting Y position to center the table vertically
   int y;
-  const int logical_total_height = static_cast<int>(metadata_total_height_ / font_scale_);
+  // metadata_total_height_ is physical
 
-  if (mode_ == Mode::VSTACK && logical_total_height < window_height_ / 2) {
-    y = (window_height_ / 2 - logical_total_height) / 2;
-  } else if (mode_ != Mode::VSTACK && logical_total_height < window_height_) {
-    y = (window_height_ - logical_total_height) / 2;
+  if (mode_ == Mode::VSTACK && metadata_total_height_ < drawable_height_ / 2) {
+    y = (drawable_height_ / 2 - metadata_total_height_) / 2;
+  } else if (mode_ != Mode::VSTACK && metadata_total_height_ < drawable_height_) {
+    y = (drawable_height_ - metadata_total_height_) / 2;
   } else {
-    y = metadata_y_offset_ + 10;
+    y = metadata_y_offset_ + static_cast<int>(10 * font_scale_);
   }
 
   for (size_t i = 0; i < metadata_textures_.size(); i++) {
     int w, h;
     SDL_QueryTexture(metadata_textures_[i], nullptr, nullptr, &w, &h);
 
-    int logical_w = static_cast<int>(w / font_scale_);
-    int logical_h = static_cast<int>(h / font_scale_);
+    int x_offset = (phys_table_width - w) / 2;
 
-    int x_offset = (table_width - logical_w) / 2;
-
-    SDL_Rect screen_area = {table_x + x_offset, y, logical_w, logical_h};
+    SDL_Rect screen_area = {phys_table_x + x_offset, y, w, h};
     SDL_RenderCopy(renderer_, metadata_textures_[i], nullptr, &screen_area);
 
-    y += logical_h + HELP_TEXT_LINE_SPACING;
+    y += h + static_cast<int>(HELP_TEXT_LINE_SPACING * font_scale_);
   }
 }
 
@@ -1910,13 +1896,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   SDL_RenderClear(renderer_);
 
   // mouse video x-position stretched to full window extent
-  const float full_ws_mouse_video_x = static_cast<float>(mouse_x_ * window_width_ / (window_width_ - 1)) * video_to_window_width_factor_;
+  float drawable_mouse_x = static_cast<float>(mouse_x_) * drawable_to_window_width_factor_;
+  float total_video_w = static_cast<float>(video_width_);
+  if (mode_ == Mode::HSTACK) total_video_w *= 2.0f;
 
-  // mouse x-position in video coordinates
-  const float video_mouse_x = (full_ws_mouse_video_x - zoom_rect.start.x()) * static_cast<float>(video_width_) / zoom_rect.size.x();
-
-  // the nearest texel border to the mouse x-position in window coordinates
-  const float video_texel_clamped_mouse_x = (std::round(video_mouse_x) * zoom_rect.size.x() / static_cast<float>(video_width_) + zoom_rect.start.x()) / video_to_window_width_factor_;
+  float ratio_x = (drawable_mouse_x - viewport_rect_.x) / viewport_rect_.w;
+  const float video_mouse_x = zoom_rect.start.x() + ratio_x * zoom_rect.size.x();
 
   if (show_left_ || show_right_) {
     const int split_x = (compare_mode && mode_ == Mode::SPLIT) ? clamp_range(std::round(video_mouse_x), 0.0F, float(video_width_)) : show_left_ ? video_width_ : 0;
@@ -1973,7 +1958,9 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     }
   }
 
-  const int mouse_drawable_x = std::round(video_texel_clamped_mouse_x * drawable_to_window_width_factor_);
+  float clamped_video_x = std::round(video_mouse_x);
+  float ratio_x_clamped = (clamped_video_x - zoom_rect.start.x()) / zoom_rect.size.x();
+  const int mouse_drawable_x = std::round(viewport_rect_.x + ratio_x_clamped * viewport_rect_.w);
   const int mouse_drawable_y = std::round(static_cast<float>(mouse_y_) * drawable_to_window_height_factor_);
 
   // zoomed area
@@ -2337,10 +2324,20 @@ Display::ZoomRect Display::compute_zoom_rect() const {
 Vector2D Display::window_to_video_position(const int window_x_position, const int window_y_position, const Display::ZoomRect& zoom_rect, const bool floor_result) const {
   auto floor_or_ceil = [&](const float value) -> int { return floor_result ? std::floor(value) : std::ceil(value); };
 
-  const int video_x = floor_or_ceil((static_cast<float>(window_x_position) * video_to_window_width_factor_ - zoom_rect.start.x()) * static_cast<float>(video_width_) / zoom_rect.size.x());
-  const int video_y = floor_or_ceil((static_cast<float>(window_y_position) * video_to_window_height_factor_ - zoom_rect.start.y()) * static_cast<float>(video_height_) / zoom_rect.size.y());
+  // 1. Window -> Drawable
+  float drawable_x = static_cast<float>(window_x_position) * drawable_to_window_width_factor_;
+  float drawable_y = static_cast<float>(window_y_position) * drawable_to_window_height_factor_;
 
-  return Vector2D(video_x, video_y);
+  // 2. Drawable -> Viewport -> Video Global (Zoomed)
+  // Calculate ratio within viewport
+  float ratio_x = (drawable_x - viewport_rect_.x) / viewport_rect_.w;
+  float ratio_y = (drawable_y - viewport_rect_.y) / viewport_rect_.h;
+
+  // Map ratio to video coordinates using zoom_rect
+  float video_x = zoom_rect.start.x() + ratio_x * zoom_rect.size.x();
+  float video_y = zoom_rect.start.y() + ratio_y * zoom_rect.size.y();
+
+  return Vector2D(floor_or_ceil(video_x), floor_or_ceil(video_y));
 }
 
 SDL_FRect Display::video_to_zoom_space(const SDL_Rect& video_rect, const Display::ZoomRect& zoom_rect) const {
@@ -2522,7 +2519,7 @@ void Display::handle_event(const SDL_Event& event) {
 
   auto handle_scroll = [&](int& y_offset, const int total_height, std::vector<SDL_Texture*>& textures) {
     y_offset += (-event_.motion.yrel * total_height * 3) / drawable_height_;
-    y_offset = std::max(y_offset, drawable_height_ - total_height - static_cast<int>(textures.size()) * HELP_TEXT_LINE_SPACING);
+    y_offset = std::max(y_offset, drawable_height_ - total_height - static_cast<int>(textures.size() * HELP_TEXT_LINE_SPACING * font_scale_));
     y_offset = std::min(y_offset, 0);
   };
 
@@ -2548,21 +2545,24 @@ void Display::handle_event(const SDL_Event& event) {
           video_to_window_height_factor_ = static_cast<float>(video_height_) / static_cast<float>(window_height_) * ((mode_ == Mode::VSTACK) ? 2.F : 1.F);
 
           font_scale_ = (drawable_to_window_width_factor_ + drawable_to_window_height_factor_) / 2.0F;
-          border_extension_ = 3;
+          border_extension_ = static_cast<int>(3 * font_scale_);
           double_border_extension_ = border_extension_ * 2;
-          line2_y_ = line1_y_ + 30;
+          line1_y_ = static_cast<int>(20 * font_scale_);
+          line2_y_ = line1_y_ + static_cast<int>(30 * font_scale_);
 
           if (mode_ != Mode::VSTACK) {
-            max_text_width_ = window_width_ / 2 - double_border_extension_ - line1_y_;
+            max_text_width_ = drawable_width_ / 2 - double_border_extension_ - line1_y_;
           } else {
-            max_text_width_ = window_width_ - double_border_extension_ - line1_y_;
+            max_text_width_ = drawable_width_ - double_border_extension_ - line1_y_;
           }
+
+          update_viewport();
 
           // Important: keep renderer logical coordinates in WINDOW points, not drawable pixels.
           // Otherwise SDL will apply an extra scale step on HiDPI displays, which often ends up
           // as a non-integer resample after the resize gesture ends (blurry output).
           // SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
-          SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
+          // SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
           break;
         }
         case SDL_WINDOWEVENT_LEAVE:
