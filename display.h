@@ -280,8 +280,8 @@ class Display {
   inline int static round(const float value) { return static_cast<int>(std::round(value)); }
 
   SDL_FRect video_rect_to_drawable_transform(const SDL_FRect& rect) const {
-    const float width_scale = drawable_to_window_width_factor_ / video_to_window_width_factor_;
-    const float height_scale = drawable_to_window_height_factor_ / video_to_window_height_factor_;
+    const float width_scale = 1.0f / video_to_window_width_factor_;
+    const float height_scale = 1.0f / video_to_window_height_factor_;
 
     return {rect.x * width_scale, rect.y * height_scale, rect.w * width_scale, rect.h * height_scale};
   }

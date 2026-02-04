@@ -366,15 +366,15 @@ Display::Display(const int display_number,
 
   font_scale_ = (drawable_to_window_width_factor_ + drawable_to_window_height_factor_) / 2.0F;
 
-  border_extension_ = 3 * font_scale_;
+  border_extension_ = 3;
   double_border_extension_ = border_extension_ * 2;
   line1_y_ = 20;
-  line2_y_ = line1_y_ + 30 * font_scale_;
+  line2_y_ = line1_y_ + 30;
 
   if (mode_ != Mode::VSTACK) {
-    max_text_width_ = drawable_width_ / 2 - double_border_extension_ - line1_y_;
+    max_text_width_ = window_width_ / 2 - double_border_extension_ - line1_y_;
   } else {
-    max_text_width_ = drawable_width_ - double_border_extension_ - line1_y_;
+    max_text_width_ = window_width_ - double_border_extension_ - line1_y_;
   }
 
   SDL_RWops* embedded_font = check_sdl(SDL_RWFromConstMem(SOURCE_CODE_PRO_REGULAR_TTF, SOURCE_CODE_PRO_REGULAR_TTF_LEN), "get pointer to font");
@@ -386,7 +386,7 @@ Display::Display(const int display_number,
   selection_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
 
   // Keep renderer logical coordinates in WINDOW points; use renderer scale to map to drawable pixels on HiDPI.
-  SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
+  // SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
   SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
 
   auto create_video_texture = [&](const std::string& scale_quality) {
@@ -954,14 +954,25 @@ void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_
 }
 
 void Display::render_text(const int x, const int y, SDL_Texture* texture, const int texture_width, const int texture_height, const int border_extension, const bool left_adjust) {
+  // Scale down the texture dimensions from physical pixels to logical points
+  const int logical_width = static_cast<int>(texture_width / font_scale_);
+  const int logical_height = static_cast<int>(texture_height / font_scale_);
+  
   // compute clip amount which ensures the filename does not extend more than half the display width
-  const int clip_amount = std::max((texture_width + double_border_extension_) - max_text_width_, 0);
+  const int clip_amount = std::max((logical_width + double_border_extension_) - max_text_width_, 0);
   const int gradient_amount = std::min(clip_amount, 24);
 
-  SDL_Rect fill_rect = {x - border_extension + gradient_amount, y - border_extension, texture_width + double_border_extension_ - clip_amount - gradient_amount, texture_height + double_border_extension_};
+  SDL_Rect fill_rect = {x - border_extension + gradient_amount, y - border_extension, logical_width + double_border_extension_ - clip_amount - gradient_amount, logical_height + double_border_extension_};
 
-  SDL_Rect src_rect = {clip_amount + gradient_amount, 0, texture_width - clip_amount - gradient_amount, texture_height};
-  SDL_Rect text_rect = {x + gradient_amount, y, texture_width - clip_amount - gradient_amount, texture_height};
+  // src_rect uses physical pixels (texture coordinates)
+  // We need to scale clip_amount and gradient_amount back to physical pixels for src_rect
+  const int phys_clip = static_cast<int>(clip_amount * font_scale_);
+  const int phys_gradient = static_cast<int>(gradient_amount * font_scale_);
+  
+  SDL_Rect src_rect = {phys_clip + phys_gradient, 0, texture_width - phys_clip - phys_gradient, texture_height};
+  
+  // text_rect uses logical points (window coordinates)
+  SDL_Rect text_rect = {x + gradient_amount, y, logical_width - clip_amount - gradient_amount, logical_height};
 
   if (!left_adjust && (mode_ != Mode::VSTACK)) {
     fill_rect.x += clip_amount;
@@ -985,17 +996,38 @@ void Display::render_text(const int x, const int y, SDL_Texture* texture, const 
     fill_rect.x--;
     fill_rect.w = 1;
 
-    src_rect.x--;
-    src_rect.w = 1;
-    text_rect.x--;
-    text_rect.w = 1;
-
-    for (int i = (gradient_amount - 1); i >= 0; i--, fill_rect.x--, src_rect.x--, text_rect.x--) {
+    // For gradient, we need to be careful with scaling. 
+    // Simulating pixel-by-pixel gradient in logical coordinates might be tricky.
+    // Let's stick to logical steps.
+    
+    // Adjust src_rect and text_rect for the loop
+    // We need to step back in logical coordinates, which means stepping back multiple pixels in texture
+    
+    for (int i = (gradient_amount - 1); i >= 0; i--) {
+      fill_rect.x--;
       SDL_SetRenderDrawColor(renderer_, draw_color_r, draw_color_g, draw_color_b, draw_color_a * i / gradient_amount);
       SDL_RenderFillRect(renderer_, &fill_rect);
 
+      // For the text part, we shift the logical destination x
+      text_rect.x--;
+      
+      // And we shift the source x. Since src is physical, we shift by font_scale_
+      // This is an approximation, but should look okay for the gradient fade
+      src_rect.x -= static_cast<int>(font_scale_);
+      src_rect.w += static_cast<int>(font_scale_); // Expand width to cover the shift? 
+      // Actually, the original code was: src_rect.x--, src_rect.w=1. It was drawing 1 pixel wide slices.
+      // To replicate this with scaling:
+      
+      SDL_Rect slice_src = src_rect;
+      slice_src.x = static_cast<int>((clip_amount + i) * font_scale_);
+      slice_src.w = static_cast<int>(font_scale_); // Grab a chunk corresponding to 1 logical point
+      if (slice_src.w < 1) slice_src.w = 1;
+      
+      SDL_Rect slice_dst = text_rect;
+      slice_dst.w = 1; // 1 logical point wide
+
       SDL_SetTextureAlphaMod(texture, alpha_mod * i / gradient_amount);
-      SDL_RenderCopy(renderer_, texture, &src_rect, &text_rect);
+      SDL_RenderCopy(renderer_, texture, &slice_src, &slice_dst);
     }
 
     // reset
@@ -1008,13 +1040,13 @@ void Display::render_progress_dots(const float position, const float progress, c
   if (duration_ > 0) {
     const float dot_size = 2.f;
 
-    const int dot_width = std::round(drawable_to_window_width_factor_ * dot_size);
-    const int dot_height = std::round(drawable_to_window_height_factor_ * dot_size);
+    const int dot_width = std::round(dot_size);
+    const int dot_height = std::round(dot_size);
 
-    const int y_offset = is_top ? 1 : drawable_height_ - 1 - dot_height;
+    const int y_offset = is_top ? 1 : window_height_ - 1 - dot_height;
 
-    const int x_position = std::round(position * drawable_width_ / duration_);
-    const int x_progress = std::round(progress * drawable_width_ / duration_);
+    const int x_position = std::round(position * window_width_ / duration_);
+    const int x_progress = std::round(progress * window_width_ / duration_);
 
     for (int x = 0; x < x_position; x++) {
       if (x % (2 * dot_width) < dot_width) {
@@ -1310,10 +1342,13 @@ void Display::render_help() {
     int w, h;
     SDL_QueryTexture(help_textures_[i], nullptr, nullptr, &w, &h);
 
-    SDL_Rect screen_area = {HELP_TEXT_HORIZONTAL_MARGIN, y, w, h};
+    int logical_w = static_cast<int>(w / font_scale_);
+    int logical_h = static_cast<int>(h / font_scale_);
+
+    SDL_Rect screen_area = {HELP_TEXT_HORIZONTAL_MARGIN, y, logical_w, logical_h};
     SDL_RenderCopy(renderer_, help_textures_[i], nullptr, &screen_area);
 
-    y += h + HELP_TEXT_LINE_SPACING;
+    y += logical_h + HELP_TEXT_LINE_SPACING;
   }
 }
 
@@ -1324,16 +1359,17 @@ void Display::render_metadata_overlay() {
   SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 3 / 2);
   SDL_RenderFillRect(renderer_, nullptr);
 
-  const int table_width = drawable_width_ - HELP_TEXT_HORIZONTAL_MARGIN * 2;
+  const int table_width = window_width_ - HELP_TEXT_HORIZONTAL_MARGIN * 2;
   const int table_x = HELP_TEXT_HORIZONTAL_MARGIN;
 
   // Calculate the starting Y position to center the table vertically
   int y;
+  const int logical_total_height = static_cast<int>(metadata_total_height_ / font_scale_);
 
-  if (mode_ == Mode::VSTACK && metadata_total_height_ < drawable_height_ / 2) {
-    y = (drawable_height_ / 2 - metadata_total_height_) / 2;
-  } else if (mode_ != Mode::VSTACK && metadata_total_height_ < drawable_height_) {
-    y = (drawable_height_ - metadata_total_height_) / 2;
+  if (mode_ == Mode::VSTACK && logical_total_height < window_height_ / 2) {
+    y = (window_height_ / 2 - logical_total_height) / 2;
+  } else if (mode_ != Mode::VSTACK && logical_total_height < window_height_) {
+    y = (window_height_ - logical_total_height) / 2;
   } else {
     y = metadata_y_offset_ + 10;
   }
@@ -1342,12 +1378,15 @@ void Display::render_metadata_overlay() {
     int w, h;
     SDL_QueryTexture(metadata_textures_[i], nullptr, nullptr, &w, &h);
 
-    int x_offset = (table_width - w) / 2;
+    int logical_w = static_cast<int>(w / font_scale_);
+    int logical_h = static_cast<int>(h / font_scale_);
 
-    SDL_Rect screen_area = {table_x + x_offset, y, w, h};
+    int x_offset = (table_width - logical_w) / 2;
+
+    SDL_Rect screen_area = {table_x + x_offset, y, logical_w, logical_h};
     SDL_RenderCopy(renderer_, metadata_textures_[i], nullptr, &screen_area);
 
-    y += h + HELP_TEXT_LINE_SPACING;
+    y += logical_h + HELP_TEXT_LINE_SPACING;
   }
 }
 
@@ -1372,13 +1411,15 @@ void Display::build_metadata_textures(const VideoMetadata& left_metadata, const 
     SDL_Color text_color = is_header ? HELP_TEXT_PRIMARY_COLOR : (primary_color ? HELP_TEXT_PRIMARY_COLOR : HELP_TEXT_ALTERNATE_COLOR);
 
     // render text with word wrapping to fit available width
-    SDL_Surface* surface = TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), text_color, drawable_width_ - HELP_TEXT_HORIZONTAL_MARGIN * 2);
+    // Use physical pixels for wrapping width calculation
+    SDL_Surface* surface = TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), text_color, drawable_width_ - static_cast<int>(HELP_TEXT_HORIZONTAL_MARGIN * 2 * font_scale_));
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
     SDL_FreeSurface(surface);
 
     // get texture dimensions and accumulate total height for scrolling calculations
     SDL_QueryTexture(texture, nullptr, nullptr, nullptr, &h);
-    metadata_total_height_ += h + HELP_TEXT_LINE_SPACING;
+    // Accumulate physical height
+    metadata_total_height_ += h + static_cast<int>(HELP_TEXT_LINE_SPACING * font_scale_);
 
     metadata_textures_.push_back(texture);
   };
@@ -2507,20 +2548,20 @@ void Display::handle_event(const SDL_Event& event) {
           video_to_window_height_factor_ = static_cast<float>(video_height_) / static_cast<float>(window_height_) * ((mode_ == Mode::VSTACK) ? 2.F : 1.F);
 
           font_scale_ = (drawable_to_window_width_factor_ + drawable_to_window_height_factor_) / 2.0F;
-          border_extension_ = 3 * font_scale_;
+          border_extension_ = 3;
           double_border_extension_ = border_extension_ * 2;
-          line2_y_ = line1_y_ + 30 * font_scale_;
+          line2_y_ = line1_y_ + 30;
 
           if (mode_ != Mode::VSTACK) {
-            max_text_width_ = drawable_width_ / 2 - double_border_extension_ - line1_y_;
+            max_text_width_ = window_width_ / 2 - double_border_extension_ - line1_y_;
           } else {
-            max_text_width_ = drawable_width_ - double_border_extension_ - line1_y_;
+            max_text_width_ = window_width_ - double_border_extension_ - line1_y_;
           }
 
           // Important: keep renderer logical coordinates in WINDOW points, not drawable pixels.
           // Otherwise SDL will apply an extra scale step on HiDPI displays, which often ends up
           // as a non-integer resample after the resize gesture ends (blurry output).
-          SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
+          // SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
           SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
           break;
         }
