@@ -151,7 +151,7 @@ static std::string format_right_file_label(const std::string& left_file_name, co
 }
 
 std::string format_window_title(const std::string& left_file_name, const std::string& right_file_name) {
-  return string_sprintf("Player X - %s  |  %s", get_file_name_and_extension(left_file_name).c_str(), get_file_name_and_extension(right_file_name).c_str());
+  return string_sprintf("PlayerX - %s  |  %s", get_file_name_and_extension(left_file_name).c_str(), get_file_name_and_extension(right_file_name).c_str());
 }
 
 std::string strip_ffmpeg_patterns(const std::string& input) {

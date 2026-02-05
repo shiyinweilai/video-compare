@@ -1,7 +1,7 @@
 #ifndef VIDEO_COMPARE_ICON_H
 #define VIDEO_COMPARE_ICON_H
 
-// Player X Icon - Auto-generated from update-icon.png
+// PlayerX Icon - Auto-generated from update-icon.png
 // Size: 128x128 BMP
 
 unsigned char VIDEO_COMPARE_ICON_BMP[] = {
