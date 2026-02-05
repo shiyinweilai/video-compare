@@ -17,6 +17,54 @@
 #include <Windows.h>
 #undef RELATIVE
 
+void enable_windows_dpi_awareness() {
+  // Try SetProcessDpiAwarenessContext (Windows 10 v1703+)
+  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+  HMODULE user32 = LoadLibraryA("user32.dll");
+  if (user32) {
+    typedef BOOL(WINAPI * SetProcessDpiAwarenessContextProc)(HANDLE);
+    SetProcessDpiAwarenessContextProc set_dpi_context =
+        (SetProcessDpiAwarenessContextProc)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+
+    if (set_dpi_context) {
+      if (set_dpi_context((HANDLE)-4)) {
+        FreeLibrary(user32);
+        return;
+      }
+    }
+    FreeLibrary(user32);
+  }
+
+  // Try SetProcessDpiAwareness (Windows 8.1+)
+  // PROCESS_PER_MONITOR_DPI_AWARE = 2
+  HMODULE shcore = LoadLibraryA("shcore.dll");
+  if (shcore) {
+    typedef HRESULT(WINAPI * SetProcessDpiAwarenessProc)(int);
+    SetProcessDpiAwarenessProc set_dpi_awareness =
+        (SetProcessDpiAwarenessProc)GetProcAddress(shcore, "SetProcessDpiAwareness");
+
+    if (set_dpi_awareness) {
+      if (SUCCEEDED(set_dpi_awareness(2))) {
+        FreeLibrary(shcore);
+        return;
+      }
+    }
+    FreeLibrary(shcore);
+  }
+
+  // Fallback to SetProcessDPIAware (Vista+)
+  if (user32 = LoadLibraryA("user32.dll")) {
+    typedef BOOL(WINAPI * SetProcessDPIAwareProc)();
+    SetProcessDPIAwareProc set_dpi_aware =
+        (SetProcessDPIAwareProc)GetProcAddress(user32, "SetProcessDPIAware");
+
+    if (set_dpi_aware) {
+      set_dpi_aware();
+    }
+    FreeLibrary(user32);
+  }
+}
+
 // Credits to Mircea Neacsu, https://github.com/neacsum/utf8
 char** get_argv(int* argc, char** argv) {
   char** uargv = nullptr;
@@ -455,6 +503,10 @@ void apply_right_video_spec(InputVideo& video, const RightVideoSpec& spec, const
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  enable_windows_dpi_awareness();
+#endif
+
   char** argv_decoded = get_argv(&argc, argv);
   int exit_code = 0;
 
@@ -558,7 +610,7 @@ int main(int argc, char** argv) {
       } else if (args["no-high-dpi"]) {
         config.high_dpi_allowed = false;
       } else {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
         config.high_dpi_allowed = true;
 #else
         config.high_dpi_allowed = false;
