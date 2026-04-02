@@ -229,6 +229,14 @@ class Display {
   SDL_Texture* video_texture_linear_;
   SDL_Texture* video_texture_nn_;
 
+  // 缓存的渐进式缩放中间 render target 纹理
+  struct CachedRT {
+    SDL_Texture* texture = nullptr;
+    int w = 0;
+    int h = 0;
+  };
+  std::vector<CachedRT> downscale_rt_cache_;
+
   SDL_Event event_;
   int mouse_x_;
   int mouse_y_;
@@ -300,8 +308,9 @@ class Display {
 
   SDL_Surface* render_text_with_fallback(const std::string& text);
 
-  SDL_Texture* get_video_texture() const;
+  SDL_Texture* get_video_texture(float scale_factor) const;
   void update_texture(const SDL_Rect* rect, const void* pixels, int pitch, const std::string& message);
+  void render_copy_downscaled(SDL_Texture* texture, const SDL_Rect* src_rect, const SDL_FRect* dst_rect, float current_scale);
 
   int round_and_clamp(const float value);
 

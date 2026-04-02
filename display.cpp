@@ -381,6 +381,7 @@ Display::Display(const int display_number,
 
   // SDL_RenderSetLogicalSize(renderer_, drawable_width_, drawable_height_);
 
+  // 创建两个视频纹理：linear 用于缩小时消除网格，nearest 用于放大/1:1时保持像素锐利
   auto create_video_texture = [&](const std::string& scale_quality) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, scale_quality.c_str());
 
@@ -485,6 +486,12 @@ void Display::update_viewport() {
 Display::~Display() {
   SDL_DestroyTexture(video_texture_linear_);
   SDL_DestroyTexture(video_texture_nn_);
+
+  // 清理缓存的渐进式缩放 render target
+  for (auto& rt : downscale_rt_cache_) {
+    if (rt.texture) SDL_DestroyTexture(rt.texture);
+  }
+  downscale_rt_cache_.clear();
   SDL_DestroyTexture(side_ui_[LEFT.as_simple_index()].text_texture);
   SDL_DestroyTexture(side_ui_[RIGHT.as_simple_index()].text_texture);
 
@@ -1048,12 +1055,113 @@ void Display::render_progress_dots(const float position, const float progress, c
   }
 }
 
-SDL_Texture* Display::get_video_texture() const {
-  return bilinear_texture_filtering_ ? video_texture_linear_ : video_texture_nn_;
+SDL_Texture* Display::get_video_texture(float scale_factor) const {
+  // 当用户强制选择 bilinear 模式时，始终使用 linear 纹理
+  // 否则自动根据缩放比选择：缩小时用 linear（消除网格伪影），放大或1:1时用 nearest（保持像素锐利）
+  if (bilinear_texture_filtering_) {
+    return video_texture_linear_;
+  }
+  return (scale_factor < 1.0f) ? video_texture_linear_ : video_texture_nn_;
 }
 
 void Display::update_texture(const SDL_Rect* rect, const void* pixels, int pitch, const std::string& message) {
-  check_sdl(SDL_UpdateTexture(get_video_texture(), rect, pixels, pitch) == 0, "video texture - " + message);
+  // 同时更新两个纹理，确保渲染时可以自由选择
+  check_sdl(SDL_UpdateTexture(video_texture_linear_, rect, pixels, pitch) == 0, "video texture linear - " + message);
+  check_sdl(SDL_UpdateTexture(video_texture_nn_, rect, pixels, pitch) == 0, "video texture nn - " + message);
+}
+
+void Display::render_copy_downscaled(SDL_Texture* texture, const SDL_Rect* src_rect, const SDL_FRect* dst_rect, float current_scale) {
+  // 放大或 1:1 时，直接渲染，无需额外处理
+  if (current_scale >= 1.0f) {
+    check_sdl(SDL_RenderCopyF(renderer_, texture, src_rect, dst_rect) == 0, "direct render copy");
+    return;
+  }
+
+  // ===== 缩小场景：使用渐进式缩放消除摩尔纹/网格伪影 =====
+  //
+  // 为什么正常播放器（mpv/VLC）缩小时不会有网格？
+  // 因为它们使用 GPU shader 实现的高质量缩放算法（Lanczos/spline），采样窗口远大于 2×2。
+  // SDL2 只提供 nearest 和 bilinear（2×2 采样），在缩小时采样不足会产生摩尔纹。
+  //
+  // 解决方案：通过中间 render target 逐级缩小（每级最多 2x），
+  // 确保每一步的缩小比例都在 bilinear 的有效范围内，模拟 mipmap 效果。
+
+  int src_w = src_rect->w;
+  int src_h = src_rect->h;
+  int dst_w = static_cast<int>(std::ceil(dst_rect->w));
+  int dst_h = static_cast<int>(std::ceil(dst_rect->h));
+
+  if (dst_w <= 0 || dst_h <= 0) return;
+
+  // 计算中间缩放级别
+  // 每级缩小约 2x，直到中间尺寸与目标尺寸的比例 <= 2x
+  struct MipLevel {
+    int w, h;
+  };
+  std::vector<MipLevel> levels;
+  int cur_w = src_w;
+  int cur_h = src_h;
+  while (cur_w > dst_w * 2 || cur_h > dst_h * 2) {
+    cur_w = std::max(1, cur_w / 2);
+    cur_h = std::max(1, cur_h / 2);
+    levels.push_back({cur_w, cur_h});
+  }
+
+  // 即使不需要中间级（缩小比例在 0.5~1.0 之间），也通过一个中间 render target
+  // 做一次高质量缩放，避免 SDL2 bilinear 直接缩放时的采样不足问题
+  if (levels.empty()) {
+    // 缩小比例在 0.5~1.0 之间，创建一个与目标尺寸相同的中间 RT
+    // 先用 bilinear 渲染到精确目标尺寸的 RT，再 1:1 拷贝到屏幕
+    // 这比直接 SDL_RenderCopyF 更可靠，因为 RT 的 bilinear 采样更精确
+    levels.push_back({dst_w, dst_h});
+  }
+
+  // 获取纹理的像素格式
+  Uint32 tex_format;
+  SDL_QueryTexture(texture, &tex_format, nullptr, nullptr, nullptr);
+
+  // 使用缓存的 render target，避免每帧重复创建/销毁纹理
+  // 如果缓存数量不匹配，重建缓存
+  if (downscale_rt_cache_.size() != levels.size()) {
+    for (auto& rt : downscale_rt_cache_) {
+      if (rt.texture) SDL_DestroyTexture(rt.texture);
+    }
+    downscale_rt_cache_.clear();
+    downscale_rt_cache_.resize(levels.size());
+  }
+
+  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+
+  SDL_Texture* prev_texture = texture;
+  SDL_Rect prev_src = *src_rect;
+
+  for (size_t i = 0; i < levels.size(); i++) {
+    auto& cached = downscale_rt_cache_[i];
+
+    // 如果缓存的 RT 尺寸不匹配，重新创建
+    if (!cached.texture || cached.w != levels[i].w || cached.h != levels[i].h) {
+      if (cached.texture) SDL_DestroyTexture(cached.texture);
+      cached.texture = SDL_CreateTexture(renderer_, tex_format, SDL_TEXTUREACCESS_TARGET, levels[i].w, levels[i].h);
+      cached.w = levels[i].w;
+      cached.h = levels[i].h;
+      if (!cached.texture) {
+        // 创建失败，回退到直接渲染
+        check_sdl(SDL_RenderCopyF(renderer_, texture, src_rect, dst_rect) == 0, "fallback render copy");
+        SDL_SetRenderTarget(renderer_, nullptr);
+        return;
+      }
+    }
+
+    SDL_SetRenderTarget(renderer_, cached.texture);
+    SDL_RenderCopy(renderer_, prev_texture, &prev_src, nullptr);
+
+    prev_texture = cached.texture;
+    prev_src = {0, 0, levels[i].w, levels[i].h};
+  }
+
+  // 最后一步：从最后一级中间纹理渲染到屏幕目标位置
+  SDL_SetRenderTarget(renderer_, nullptr);
+  check_sdl(SDL_RenderCopyF(renderer_, prev_texture, &prev_src, dst_rect) == 0, "final downscaled render copy");
 }
 
 int Display::round_and_clamp(const float value) {
@@ -1896,6 +2004,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   const float video_mouse_x = zoom_rect.start.x() + ratio_x * zoom_rect.size.x();
 
   if (show_left_ || show_right_) {
+    // 根据当前缩放比动态选择纹理过滤模式
+    // zoom_rect.zoom_factor 表示可见区域占视频总尺寸的比例（越小=越放大，越大=越缩小）
+    // 实际缩放比 = 视口像素宽度 / 实际显示的视频像素宽度
+    const float visible_video_w = total_video_w * zoom_rect.zoom_factor;
+    const float current_scale = static_cast<float>(viewport_rect_.w) / visible_video_w;
+
     const int split_x = (compare_mode && mode_ == Mode::SPLIT) ? clamp_range(std::round(video_mouse_x), 0.0F, float(video_width_)) : show_left_ ? video_width_ : 0;
 
     // update video
@@ -1913,7 +2027,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         }
       }
 
-      check_sdl(SDL_RenderCopyF(renderer_, get_video_texture(), &tex_render_quad_left, &screen_render_quad_left) == 0, "left video texture render copy");
+      render_copy_downscaled(get_video_texture(current_scale), &tex_render_quad_left, &screen_render_quad_left, current_scale);
     }
     if (show_right_ && ((split_x < video_width_) || mode_ != Mode::SPLIT)) {
       const int start_right = (mode_ == Mode::SPLIT) ? std::max(split_x, 0) : 0;
@@ -1946,7 +2060,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         }
       }
 
-      check_sdl(SDL_RenderCopyF(renderer_, get_video_texture(), &tex_render_quad_right, &screen_render_quad_right) == 0, "right video texture render copy");
+      render_copy_downscaled(get_video_texture(current_scale), &tex_render_quad_right, &screen_render_quad_right, current_scale);
     }
   }
 
@@ -2792,7 +2906,7 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_t:
           bilinear_texture_filtering_ = !bilinear_texture_filtering_;
-          std::cout << "Video texture filter set to '" << (bilinear_texture_filtering_ ? "BILINEAR" : "NEAREST NEIGHBOR") << "'" << std::endl;
+          std::cout << "Video texture filter set to '" << (bilinear_texture_filtering_ ? "BILINEAR (forced)" : "AUTO (nearest when upscaling, linear when downscaling)") << "'" << std::endl;
           break;
         case SDLK_s: {
           swap_left_right_ = !swap_left_right_;
