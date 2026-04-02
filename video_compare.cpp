@@ -794,11 +794,20 @@ void VideoCompare::compare() {
         timer_->reset();
       }
 
-      forward_navigate_frames += display_->get_frame_navigation_delta();
+      const int nav_delta = display_->get_frame_navigation_delta();
+      float extra_seek = 0.0f;
+      if (nav_delta < 0) {
+        const float frame_dur_sec = (left.delta_pts_ > 0) ? static_cast<float>(left.delta_pts_) * AV_TIME_TO_SEC : (1.0f / 30.0f);
+        extra_seek = frame_dur_sec * nav_delta;
+      } else {
+        forward_navigate_frames += nav_delta;
+      }
+
+      const float combined_seek = display_->get_seek_relative() + extra_seek;
 
       bool skip_update = false;
 
-      if ((display_->get_seek_relative() != 0.0F) || (display_->get_shift_right_frames() != 0)) {
+      if ((combined_seek != 0.0F) || (display_->get_shift_right_frames() != 0)) {
         total_right_time_shifted += display_->get_shift_right_frames();
 
         // compute effective time shift
@@ -849,13 +858,12 @@ void VideoCompare::compare() {
         const float left_position = left.pts_ * AV_TIME_TO_SEC + left.start_time_;
 
         if (display_->get_seek_from_start()) {
-          // seek from start based on the shortest stream duration in seconds
-          next_left_position = shortest_duration_ * display_->get_seek_relative() + left.start_time_;
+          next_left_position = shortest_duration_ * combined_seek + left.start_time_;
         } else {
-          next_left_position = left_position + display_->get_seek_relative();
+          next_left_position = left_position + combined_seek;
         }
 
-        const bool backward = (display_->get_seek_relative() < 0.0F) || (display_->get_shift_right_frames() != 0);
+        const bool backward = (combined_seek < 0.0F) || (display_->get_shift_right_frames() != 0);
 
         auto compute_right_position = [&](const SideState& right_state) -> float { return left.pts_ * AV_TIME_TO_SEC + right_state.start_time_; };
 
@@ -869,9 +877,9 @@ void VideoCompare::compare() {
 
             float next_right_position;
             if (display_->get_seek_from_start()) {
-              next_right_position = shortest_duration_ * display_->get_seek_relative() + right_state.start_time_;
+              next_right_position = shortest_duration_ * combined_seek + right_state.start_time_;
             } else {
-              next_right_position = compute_right_position(right_state) + display_->get_seek_relative();
+              next_right_position = compute_right_position(right_state) + combined_seek;
             }
 
             next_right_position += (static_right_time_shift + right_state.delta_pts_) * AV_TIME_TO_SEC;

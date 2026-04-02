@@ -2259,6 +2259,54 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     render_text(text_x, text_y, playack_speed_text_texture, playack_speed_text_width, playack_speed_text_height, border_extension_, false);
     SDL_DestroyTexture(playack_speed_text_texture);
 
+    // frame step buttons: |< [play/pause] >|
+    {
+      const char* prev_label = "|<";
+      const char* pp_label = play_ ? "||" : ">";
+      const char* next_label = ">|";
+      static const SDL_Color BTN_COLOR = {200, 200, 200, 0};
+      static const SDL_Color BTN_ACTIVE_COLOR = {255, 255, 255, 0};
+
+      auto make_btn_texture = [&](const char* label, const SDL_Color& color) -> std::tuple<SDL_Texture*, int, int> {
+        SDL_Surface* s = TTF_RenderUTF8_Blended(small_font_, label, color);
+        SDL_Texture* t = SDL_CreateTextureFromSurface(renderer_, s);
+        int w = s->w, h = s->h;
+        SDL_FreeSurface(s);
+        return {t, w, h};
+      };
+
+      auto [prev_tex, prev_w, prev_h] = make_btn_texture(prev_label, BTN_COLOR);
+      auto [pp_tex, pp_w, pp_h] = make_btn_texture(pp_label, BTN_ACTIVE_COLOR);
+      auto [next_tex, next_w, next_h] = make_btn_texture(next_label, BTN_COLOR);
+
+      const int btn_spacing = static_cast<int>(12 * font_scale_);
+      const int total_w = prev_w + pp_w + next_w + btn_spacing * 2;
+      const int btn_y = drawable_height_ - line1_y_ - zoom_position_text_height - prev_h - static_cast<int>(8 * font_scale_);
+      int bx = drawable_width_ / 2 - total_w / 2;
+
+      auto draw_btn = [&](SDL_Texture* tex, int w, int h, int x, int y, SDL_Rect& hit_rect) {
+        SDL_Rect bg = {x - border_extension_, y - border_extension_, w + double_border_extension_, h + double_border_extension_};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
+        SDL_RenderFillRect(renderer_, &bg);
+        SDL_Rect dst = {x, y, w, h};
+        SDL_RenderCopy(renderer_, tex, nullptr, &dst);
+        hit_rect = {static_cast<int>((x - border_extension_) / drawable_to_window_width_factor_),
+                    static_cast<int>((y - border_extension_) / drawable_to_window_height_factor_),
+                    static_cast<int>((w + double_border_extension_) / drawable_to_window_width_factor_),
+                    static_cast<int>((h + double_border_extension_) / drawable_to_window_height_factor_)};
+      };
+
+      draw_btn(prev_tex, prev_w, prev_h, bx, btn_y, btn_prev_frame_);
+      bx += prev_w + btn_spacing;
+      draw_btn(pp_tex, pp_w, pp_h, bx, btn_y, btn_play_pause_);
+      bx += pp_w + btn_spacing;
+      draw_btn(next_tex, next_w, next_h, bx, btn_y, btn_next_frame_);
+
+      SDL_DestroyTexture(prev_tex);
+      SDL_DestroyTexture(pp_tex);
+      SDL_DestroyTexture(next_tex);
+    }
+
     // current frame / number of frames in history buffer
     text_surface = TTF_RenderText_Blended(small_font_, current_total_browsable.c_str(), BUFFER_COLOR);
     SDL_Texture* current_total_browsable_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
@@ -2725,6 +2773,23 @@ void Display::handle_event(const SDL_Event& event) {
       }
       break;
     case SDL_MOUSEBUTTONDOWN:
+      if (event_.button.button == SDL_BUTTON_LEFT && show_hud_) {
+        SDL_Point click_pt = {mouse_x_, mouse_y_};
+        if (SDL_PointInRect(&click_pt, &btn_prev_frame_)) {
+          frame_navigation_delta_--;
+          break;
+        }
+        if (SDL_PointInRect(&click_pt, &btn_play_pause_)) {
+          play_ = !play_;
+          buffer_play_loop_mode_ = Loop::OFF;
+          tick_playback_ = play_;
+          break;
+        }
+        if (SDL_PointInRect(&click_pt, &btn_next_frame_)) {
+          frame_navigation_delta_++;
+          break;
+        }
+      }
       if (event_.button.button == SDL_BUTTON_LEFT && save_selected_area_ && selection_state_ == SelectionState::NONE) {
         selection_state_ = SelectionState::STARTED;
         selection_start_ = window_to_video_position(mouse_x_, mouse_y_, compute_zoom_rect());
@@ -2888,7 +2953,7 @@ void Display::handle_event(const SDL_Event& event) {
         }
         case SDLK_a:
           if (keymod & KMOD_SHIFT) {
-            std::cerr << "Frame-accurate backward navigation has not yet been implemented" << std::endl;
+            frame_navigation_delta_--;
           } else {
             frame_buffer_offset_delta_++;
           }
