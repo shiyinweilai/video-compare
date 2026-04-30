@@ -2417,45 +2417,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       SDL_DestroyTexture(next_tex);
     }
 
-    // current frame / number of frames in history buffer
-    text_surface = TTF_RenderText_Blended(small_font_, current_total_browsable.c_str(), BUFFER_COLOR);
-    SDL_Texture* current_total_browsable_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
-    const int current_total_browsable_text_width = text_surface->w;
-    const int current_total_browsable_text_height = text_surface->h;
-    SDL_FreeSurface(text_surface);
-
-    text_y = (mode_ == Mode::VSTACK) ? line1_y_ : line2_y_;
-
-    // blink label in loop mode
-    fill_rect = {drawable_width_ / 2 - current_total_browsable_text_width / 2 - border_extension_, text_y - border_extension_, current_total_browsable_text_width + double_border_extension_,
-                 current_total_browsable_text_height + double_border_extension_};
-
-    SDL_Color label_color = LOOP_OFF_LABEL_COLOR;
-    int label_alpha = BACKGROUND_ALPHA;
-
-    if (buffer_play_loop_mode_ != Display::Loop::OFF) {
-      label_alpha *= 1.0 + sin(float(SDL_GetTicks()) / 180.0) * 0.6;
-
-      switch (buffer_play_loop_mode_) {
-        case Display::Loop::FORWARDONLY:
-          label_color = LOOP_FW_LABEL_COLOR;
-          break;
-        case Display::Loop::PINGPONG:
-          label_color = LOOP_PP_LABEL_COLOR;
-          break;
-        default:
-          break;
-      }
-
-      timer_based_update_performed_ = true;
-    }
-
-    SDL_SetRenderDrawColor(renderer_, label_color.r, label_color.g, label_color.b, label_alpha);
-    SDL_RenderFillRect(renderer_, &fill_rect);
-
-    text_rect = {drawable_width_ / 2 - current_total_browsable_text_width / 2, text_y, current_total_browsable_text_width, current_total_browsable_text_height};
-    SDL_RenderCopy(renderer_, current_total_browsable_text_texture, nullptr, &text_rect);
-    SDL_DestroyTexture(current_total_browsable_text_texture);
+    // 帧缓冲区位置指示器已移除
 
     // display progress as dot lines
     render_progress_dots(left_position, left_progress, true);
@@ -2931,9 +2893,6 @@ void Display::handle_event(const SDL_Event& event) {
         }
 
         selection_end_ = selection_start_;
-      } else if (event_.button.button != SDL_BUTTON_RIGHT) {
-        seek_relative_ = static_cast<float>(mouse_x_) / static_cast<float>(window_width_);
-        seek_from_start_ = true;
       }
       update_cursor();
       break;
@@ -3192,27 +3151,7 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_x:
           show_fps_ = true;
           break;
-        case SDLK_PLUS:
-        case SDLK_KP_PLUS:
-        case SDLK_EQUALS:  // for tenkeyless keyboards
-          if (keymod & KMOD_ALT) {
-            shift_right_frames_ += 100;
-          } else if (keymod & KMOD_CTRL) {
-            shift_right_frames_ += 10;
-          } else {
-            shift_right_frames_++;
-          }
-          break;
-        case SDLK_MINUS:
-        case SDLK_KP_MINUS:
-          if (keymod & KMOD_ALT) {
-            shift_right_frames_ -= 100;
-          } else if (keymod & KMOD_CTRL) {
-            shift_right_frames_ -= 10;
-          } else {
-            shift_right_frames_--;
-          }
-          break;
+
         case SDLK_y:
           // Cycle through subtraction modes
           switch (diff_mode_) {
