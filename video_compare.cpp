@@ -683,6 +683,8 @@ void VideoCompare::compare() {
     SideState* right_ptr = &side_states.at(active_right);
 
     int frame_offset = 0;
+    int left_individual_offset = 0;
+    int right_individual_offset = 0;
 
     int64_t static_right_time_shift = time_shift_offset_av_time_;
     int total_right_time_shifted = 0;
@@ -795,20 +797,41 @@ void VideoCompare::compare() {
       }
 
       const int nav_delta = display_->get_frame_navigation_delta();
-      float extra_seek = 0.0f;
       if (nav_delta < 0) {
-        const float frame_dur_sec = (left.delta_pts_ > 0) ? static_cast<float>(left.delta_pts_) * AV_TIME_TO_SEC : (1.0f / 30.0f);
-        extra_seek = frame_dur_sec * nav_delta;
-      } else {
-        forward_navigate_frames += nav_delta;
+        // 帧快退：在缓冲区中后退，不触发seek
+        // frame_offset增加表示浏览更旧的帧，后面adjust_frame_offset会clamp到有效范围
+        frame_offset = std::max(0, frame_offset + (-nav_delta));
+      } else if (nav_delta > 0) {
+        // 帧快进：如果当前在缓冲区中浏览历史帧，先回到最新帧
+        if (frame_offset > 0) {
+          const int steps_to_front = std::min(nav_delta, frame_offset);
+          frame_offset -= steps_to_front;
+          const int remaining = nav_delta - steps_to_front;
+          if (remaining > 0) {
+            forward_navigate_frames += remaining;
+          }
+        } else {
+          forward_navigate_frames += nav_delta;
+        }
       }
 
-      const float combined_seek = display_->get_seek_relative() + extra_seek;
+      const float combined_seek = display_->get_seek_relative();
 
       bool skip_update = false;
 
-      if ((combined_seek != 0.0F) || (display_->get_shift_right_frames() != 0)) {
-        total_right_time_shifted += display_->get_shift_right_frames();
+      // 单侧帧步进：修改独立的帧缓冲区偏移，不影响另一侧
+      const int shift_left = display_->get_shift_left_frames();
+      const int shift_right = display_->get_shift_right_frames();
+      if (shift_left != 0) {
+        // 左侧前进 = left_individual_offset减小（更靠近deque front/最新帧）
+        // 左侧后退 = left_individual_offset增大（更靠近deque back/更旧帧）
+        left_individual_offset = std::max(0, left_individual_offset - shift_left);
+      }
+      if (shift_right != 0) {
+        right_individual_offset = std::max(0, right_individual_offset - shift_right);
+      }
+
+      if (combined_seek != 0.0F) {
 
         // compute effective time shift
         static_right_time_shift = time_shift_offset_av_time_ + total_right_time_shifted * (right_ptr->delta_pts_ > 0 ? right_ptr->delta_pts_ : 10000);
@@ -863,7 +886,7 @@ void VideoCompare::compare() {
           next_left_position = left_position + combined_seek;
         }
 
-        const bool backward = (combined_seek < 0.0F) || (display_->get_shift_right_frames() != 0);
+        const bool backward = (combined_seek < 0.0F);
 
         auto compute_right_position = [&](const SideState& right_state) -> float { return left.pts_ * AV_TIME_TO_SEC + right_state.start_time_; };
 
@@ -975,6 +998,10 @@ void VideoCompare::compare() {
 
         // don't sync until the next iteration to prevent freezing when comparing a single image
         skip_update = true;
+
+        // seek后缓冲区被清空，重置独立帧偏移
+        left_individual_offset = 0;
+        right_individual_offset = 0;
       }
 
       bool store_frames = false;
@@ -1167,8 +1194,14 @@ void VideoCompare::compare() {
           const auto& left_frames_ref = !display_->get_swap_left_right() ? left.frames_ : right_ptr->frames_;
           const auto& right_frames_ref = !display_->get_swap_left_right() ? right_ptr->frames_ : left.frames_;
 
-          const auto left_display_frame = left_frames_ref[frame_offset].get();
-          const auto right_display_frame = right_frames_ref[frame_offset].get();
+          // 计算左右独立的帧偏移（clamp到有效范围）
+          const int left_max_index = static_cast<int>(left_frames_ref.size()) - 1;
+          const int right_max_index = static_cast<int>(right_frames_ref.size()) - 1;
+          const int effective_left_offset = std::min(frame_offset + left_individual_offset, left_max_index);
+          const int effective_right_offset = std::min(frame_offset + right_individual_offset, right_max_index);
+
+          const auto left_display_frame = left_frames_ref[effective_left_offset].get();
+          const auto right_display_frame = right_frames_ref[effective_right_offset].get();
 
           // count the number of unique in-sync video frame combinations processed
           if (is_playback_in_sync) {

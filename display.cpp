@@ -2116,7 +2116,9 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     if (show_left_) {
       // file name and current position of left video
       const std::string left_picture_type(1, av_get_picture_type_char(left_frame->pict_type));
-      const std::string left_pos_str = format_position(left_position, true) + " " + left_picture_type + format_position_difference(left_position, right_position);
+      const int64_t left_frame_dur = ffmpeg::frame_duration(left_frame);
+      const int64_t left_frame_num = (left_frame_dur > 0) ? (left_frame->pts / left_frame_dur) : 0;
+      const std::string left_pos_str = format_position(left_position, true) + " " + left_picture_type + " #" + std::to_string(left_frame_num) + format_position_difference(left_position, right_position);
       text_surface = TTF_RenderText_Blended(small_font_, left_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* left_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       const int left_position_text_width = text_surface->w;
@@ -2134,11 +2136,62 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       }
 
       SDL_DestroyTexture(left_position_text_texture);
+
+      // 左侧独立帧步进按钮 ◀ ▶
+      {
+        static const SDL_Color SIDE_BTN_COLOR = {180, 220, 255, 0};
+        const char* l_prev_label = "<<";
+        const char* l_next_label = ">>";
+
+        SDL_Surface* lp_s = TTF_RenderUTF8_Blended(small_font_, l_prev_label, SIDE_BTN_COLOR);
+        SDL_Texture* lp_tex = SDL_CreateTextureFromSurface(renderer_, lp_s);
+        int lp_w = lp_s->w, lp_h = lp_s->h;
+        SDL_FreeSurface(lp_s);
+
+        SDL_Surface* ln_s = TTF_RenderUTF8_Blended(small_font_, l_next_label, SIDE_BTN_COLOR);
+        SDL_Texture* ln_tex = SDL_CreateTextureFromSurface(renderer_, ln_s);
+        int ln_w = ln_s->w, ln_h = ln_s->h;
+        SDL_FreeSurface(ln_s);
+
+        const int side_btn_spacing = static_cast<int>(10 * font_scale_);
+        const int line3_y = line2_y_ + left_position_text_height + static_cast<int>(6 * font_scale_);
+        int lbx = line1_y_;
+
+        // 绘制左侧 << 按钮
+        SDL_Rect lp_bg = {lbx - border_extension_, line3_y - border_extension_, lp_w + double_border_extension_, lp_h + double_border_extension_};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
+        SDL_RenderFillRect(renderer_, &lp_bg);
+        SDL_Rect lp_dst = {lbx, line3_y, lp_w, lp_h};
+        SDL_RenderCopy(renderer_, lp_tex, nullptr, &lp_dst);
+        btn_left_prev_frame_ = {static_cast<int>((lbx - border_extension_) / drawable_to_window_width_factor_),
+                                static_cast<int>((line3_y - border_extension_) / drawable_to_window_height_factor_),
+                                static_cast<int>((lp_w + double_border_extension_) / drawable_to_window_width_factor_),
+                                static_cast<int>((lp_h + double_border_extension_) / drawable_to_window_height_factor_)};
+
+        lbx += lp_w + side_btn_spacing;
+
+        // 绘制左侧 >> 按钮
+        SDL_Rect ln_bg = {lbx - border_extension_, line3_y - border_extension_, ln_w + double_border_extension_, ln_h + double_border_extension_};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
+        SDL_RenderFillRect(renderer_, &ln_bg);
+        SDL_Rect ln_dst = {lbx, line3_y, ln_w, ln_h};
+        SDL_RenderCopy(renderer_, ln_tex, nullptr, &ln_dst);
+        btn_left_next_frame_ = {static_cast<int>((lbx - border_extension_) / drawable_to_window_width_factor_),
+                                static_cast<int>((line3_y - border_extension_) / drawable_to_window_height_factor_),
+                                static_cast<int>((ln_w + double_border_extension_) / drawable_to_window_width_factor_),
+                                static_cast<int>((ln_h + double_border_extension_) / drawable_to_window_height_factor_)};
+
+        SDL_DestroyTexture(lp_tex);
+        SDL_DestroyTexture(ln_tex);
+      }
     }
     if (show_right_) {
       // file name and current position of right video
       const std::string right_picture_type(1, av_get_picture_type_char(right_frame->pict_type));
-      const std::string right_pos_str = format_position(right_position, true) + " " + right_picture_type + format_position_difference(right_position, left_position);
+      // 使用左侧的frame_duration统一计算帧号，确保同源视频帧号对齐
+      const int64_t right_frame_dur_for_num = ffmpeg::frame_duration(left_frame);
+      const int64_t right_frame_num = (right_frame_dur_for_num > 0) ? (right_frame->pts / right_frame_dur_for_num) : 0;
+      const std::string right_pos_str = format_position(right_position, true) + " " + right_picture_type + " #" + std::to_string(right_frame_num) + format_position_difference(right_position, left_position);
       text_surface = TTF_RenderText_Blended(small_font_, right_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* right_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       int right_position_text_width = text_surface->w;
@@ -2167,6 +2220,63 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       render_text(text2_x, text2_y, right_position_text_texture, right_position_text_width, right_position_text_height, border_extension_, false);
 
       SDL_DestroyTexture(right_position_text_texture);
+
+      // 右侧独立帧步进按钮 ◀ ▶
+      {
+        static const SDL_Color SIDE_BTN_COLOR = {180, 220, 255, 0};
+        const char* r_prev_label = "<<";
+        const char* r_next_label = ">>";
+
+        SDL_Surface* rp_s = TTF_RenderUTF8_Blended(small_font_, r_prev_label, SIDE_BTN_COLOR);
+        SDL_Texture* rp_tex = SDL_CreateTextureFromSurface(renderer_, rp_s);
+        int rp_w = rp_s->w, rp_h = rp_s->h;
+        SDL_FreeSurface(rp_s);
+
+        SDL_Surface* rn_s = TTF_RenderUTF8_Blended(small_font_, r_next_label, SIDE_BTN_COLOR);
+        SDL_Texture* rn_tex = SDL_CreateTextureFromSurface(renderer_, rn_s);
+        int rn_w = rn_s->w, rn_h = rn_s->h;
+        SDL_FreeSurface(rn_s);
+
+        const int side_btn_spacing = static_cast<int>(10 * font_scale_);
+        const int right_btn_total_w = rp_w + rn_w + side_btn_spacing;
+
+        int r_line3_y;
+        int rbx;
+        if (mode_ == Mode::VSTACK) {
+          r_line3_y = drawable_height_ - line2_y_ - side_ui_[displayed_right_side_.as_simple_index()].text_height - static_cast<int>(6 * font_scale_) - rp_h;
+          rbx = line1_y_;
+        } else {
+          r_line3_y = line2_y_ + right_position_text_height + static_cast<int>(6 * font_scale_);
+          rbx = drawable_width_ - line1_y_ - right_btn_total_w;
+        }
+
+        // 绘制右侧 << 按钮
+        SDL_Rect rp_bg = {rbx - border_extension_, r_line3_y - border_extension_, rp_w + double_border_extension_, rp_h + double_border_extension_};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
+        SDL_RenderFillRect(renderer_, &rp_bg);
+        SDL_Rect rp_dst = {rbx, r_line3_y, rp_w, rp_h};
+        SDL_RenderCopy(renderer_, rp_tex, nullptr, &rp_dst);
+        btn_right_prev_frame_ = {static_cast<int>((rbx - border_extension_) / drawable_to_window_width_factor_),
+                                 static_cast<int>((r_line3_y - border_extension_) / drawable_to_window_height_factor_),
+                                 static_cast<int>((rp_w + double_border_extension_) / drawable_to_window_width_factor_),
+                                 static_cast<int>((rp_h + double_border_extension_) / drawable_to_window_height_factor_)};
+
+        rbx += rp_w + side_btn_spacing;
+
+        // 绘制右侧 >> 按钮
+        SDL_Rect rn_bg = {rbx - border_extension_, r_line3_y - border_extension_, rn_w + double_border_extension_, rn_h + double_border_extension_};
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
+        SDL_RenderFillRect(renderer_, &rn_bg);
+        SDL_Rect rn_dst = {rbx, r_line3_y, rn_w, rn_h};
+        SDL_RenderCopy(renderer_, rn_tex, nullptr, &rn_dst);
+        btn_right_next_frame_ = {static_cast<int>((rbx - border_extension_) / drawable_to_window_width_factor_),
+                                 static_cast<int>((r_line3_y - border_extension_) / drawable_to_window_height_factor_),
+                                 static_cast<int>((rn_w + double_border_extension_) / drawable_to_window_width_factor_),
+                                 static_cast<int>((rn_h + double_border_extension_) / drawable_to_window_height_factor_)};
+
+        SDL_DestroyTexture(rp_tex);
+        SDL_DestroyTexture(rn_tex);
+      }
     }
     if (mouse_is_inside_window_ && duration_ > 0) {
       // target seek position
@@ -2630,6 +2740,7 @@ void Display::begin_input_frame() {
   seek_from_start_ = false;
   frame_buffer_offset_delta_ = 0;
   frame_navigation_delta_ = 0;
+  shift_left_frames_ = 0;
   shift_right_frames_ = 0;
   tick_playback_ = false;
   possibly_tick_playback_ = false;
@@ -2787,6 +2898,24 @@ void Display::handle_event(const SDL_Event& event) {
         }
         if (SDL_PointInRect(&click_pt, &btn_next_frame_)) {
           frame_navigation_delta_++;
+          break;
+        }
+        // 左侧视频独立帧步进按钮
+        if (SDL_PointInRect(&click_pt, &btn_left_prev_frame_)) {
+          shift_left_frames_--;
+          break;
+        }
+        if (SDL_PointInRect(&click_pt, &btn_left_next_frame_)) {
+          shift_left_frames_++;
+          break;
+        }
+        // 右侧视频独立帧步进按钮
+        if (SDL_PointInRect(&click_pt, &btn_right_prev_frame_)) {
+          shift_right_frames_--;
+          break;
+        }
+        if (SDL_PointInRect(&click_pt, &btn_right_next_frame_)) {
+          shift_right_frames_++;
           break;
         }
       }
@@ -3199,6 +3328,10 @@ int Display::get_frame_buffer_offset_delta() const {
 
 int Display::get_frame_navigation_delta() const {
   return frame_navigation_delta_;
+}
+
+int Display::get_shift_left_frames() const {
+  return shift_left_frames_;
 }
 
 int Display::get_shift_right_frames() const {

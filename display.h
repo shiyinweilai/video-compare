@@ -149,6 +149,7 @@ class Display {
   float seek_relative_{0.0F};
   int frame_buffer_offset_delta_{0};
   int frame_navigation_delta_{0};
+  int shift_left_frames_{0};
   int shift_right_frames_{0};
   bool seek_from_start_{false};
   bool save_image_frames_{false};
@@ -185,6 +186,14 @@ class Display {
   SDL_Rect btn_prev_frame_{0, 0, 0, 0};
   SDL_Rect btn_play_pause_{0, 0, 0, 0};
   SDL_Rect btn_next_frame_{0, 0, 0, 0};
+
+  // 左侧视频独立帧步进按钮
+  SDL_Rect btn_left_prev_frame_{0, 0, 0, 0};
+  SDL_Rect btn_left_next_frame_{0, 0, 0, 0};
+
+  // 右侧视频独立帧步进按钮
+  SDL_Rect btn_right_prev_frame_{0, 0, 0, 0};
+  SDL_Rect btn_right_next_frame_{0, 0, 0, 0};
 
   float global_zoom_level_{0.0F};
   float global_zoom_factor_{1.0F};
@@ -412,6 +421,7 @@ class Display {
   bool get_seek_from_start() const;
   int get_frame_buffer_offset_delta() const;
   int get_frame_navigation_delta() const;
+  int get_shift_left_frames() const;
   int get_shift_right_frames() const;
   float get_playback_speed_factor() const;
   bool get_tick_playback() const;
