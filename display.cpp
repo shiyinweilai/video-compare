@@ -16,7 +16,6 @@
 #include "ffmpeg.h"
 #include "format_converter.h"
 #include "source_code_pro_regular_ttf.h"
-#include "version.h"
 #include "video_compare_icon.h"
 
 extern "C" {
@@ -184,12 +183,7 @@ static std::string to_hex(const uint32_t value, const int width) {
   return sstream.str();
 }
 
-static std::string format_libav_version(unsigned version) {
-  int major = (version >> 16) & 0xff;
-  int minor = (version >> 8) & 0xff;
-  int micro = version & 0xff;
-  return string_sprintf("%2u.%2u.%3u", major, minor, micro);
-}
+
 
 auto get_metadata_int_value = [](const AVFrame* frame, const std::string& key, const int default_value) -> int {
   const AVDictionaryEntry* entry = av_dict_get(frame->metadata, key.c_str(), nullptr, 0);

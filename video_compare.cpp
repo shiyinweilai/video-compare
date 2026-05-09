@@ -7,7 +7,6 @@
 #include <limits>
 #include <thread>
 #include "ffmpeg.h"
-#include "sdl_event_info.h"
 #include "side_aware_logger.h"
 #include "sorted_flat_deque.h"
 #include "string_utils.h"
@@ -25,14 +24,6 @@ static constexpr uint32_t SLEEP_PERIOD_MS = 10;
 static constexpr uint32_t ONE_SECOND_US = 1000 * 1000;
 static constexpr uint32_t RESYNC_UPDATE_RATE_US = ONE_SECOND_US / 10;
 static constexpr uint32_t NOMINAL_FPS_UPDATE_RATE_US = 1 * ONE_SECOND_US;
-
-static bool env_flag_enabled(const char* name) {
-  const char* v = std::getenv(name);
-  if (v == nullptr) {
-    return false;
-  }
-  return (v[0] == '1') || (v[0] == 'y') || (v[0] == 'Y') || (v[0] == 't') || (v[0] == 'T');
-}
 
 static auto avpacket_deleter = [](AVPacket* packet) {
   av_packet_unref(packet);
@@ -705,8 +696,6 @@ void VideoCompare::compare() {
 
     double next_refresh_at = 0;
 
-    const bool log_event_routing = env_flag_enabled("VIDEO_COMPARE_LOG_EVENT_ROUTING");
-
     for (uint64_t frame_number = 0;; ++frame_number) {
       // Set FPS message if needed
       if (display_->get_show_fps()) {
@@ -724,13 +713,8 @@ void VideoCompare::compare() {
       while (SDL_PollEvent(&event) != 0) {
         display_->mark_input_received();
 
-        const uint32_t wid = SDLEventInfo::window_id(event);
         display_->handle_event(event);
-
-        if (log_event_routing) {
-          std::cerr << "[event] type=" << SDLEventInfo::type_name(event.type) << " (" << event.type << ")"
-                    << " windowID=" << wid << std::endl;
-        }      }
+      }
 
       if (!keep_running()) {
         break;
