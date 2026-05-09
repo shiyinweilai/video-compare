@@ -10,6 +10,44 @@
 #include <string>
 #include <vector>
 #include "core_types.h"
+// ── LanczosScaler（内联自 lanczos_scaler.h / lanczos_scaler.cpp）──────────
+extern "C" {
+#include <libswscale/swscale.h>
+}
+
+/**
+ * LanczosScaler（实际使用 Bicubic 算法）
+ * 使用 FFmpeg libswscale 的 SWS_BICUBIC 算法对 RGB 平面数据做高质量缩放。
+ */
+class LanczosScaler {
+ public:
+  LanczosScaler() = default;
+  ~LanczosScaler();
+
+  LanczosScaler(const LanczosScaler&) = delete;
+  LanczosScaler& operator=(const LanczosScaler&) = delete;
+
+  const uint8_t* scale(const uint8_t* src_pixels, int src_pitch,
+                       int src_w, int src_h,
+                       int dst_w, int dst_h,
+                       bool is_10bpc);
+
+  int dst_pitch() const { return dst_pitch_; }
+
+ private:
+  void free_context();
+  void ensure_context(int src_w, int src_h, int dst_w, int dst_h, bool is_10bpc);
+  void ensure_buffer(int dst_w, int dst_h, bool is_10bpc);
+
+  SwsContext* sws_ctx_{nullptr};
+  int ctx_src_w_{0}, ctx_src_h_{0};
+  int ctx_dst_w_{0}, ctx_dst_h_{0};
+  bool ctx_is_10bpc_{false};
+
+  std::vector<uint8_t> buffer_;
+  int dst_pitch_{0};
+};
+// ── LanczosScaler end ──────────────────────────────────────────────────────
 #include "row_workers.h"
 #include "scope_window.h"
 #include "string_utils.h"
@@ -248,13 +286,19 @@ class Display {
   SDL_Texture* video_texture_linear_;
   SDL_Texture* video_texture_nn_;
 
-  // 缓存的渐进式缩放中间 render target 纹理
-  struct CachedRT {
+  // Lanczos 高质量缩放器（替换渐进式 bilinear render target 方案）
+  LanczosScaler lanczos_scaler_;
+
+  // Lanczos 缩放后的纹理缓存（缩小场景下，上传缩放后的小纹理，1:1 渲染）
+  struct LanczosTexCache {
     SDL_Texture* texture = nullptr;
-    int w = 0;
-    int h = 0;
+    int src_w = 0, src_h = 0;  // 源尺寸（用于判断是否需要重建纹理）
+    int dst_w = 0, dst_h = 0;  // 目标尺寸
+    bool is_10bpc = false;
   };
-  std::vector<CachedRT> downscale_rt_cache_;
+  // 左右两路视频各一个缓存纹理
+  LanczosTexCache lanczos_tex_left_;
+  LanczosTexCache lanczos_tex_right_;
 
   SDL_Event event_;
   int mouse_x_;
@@ -327,9 +371,14 @@ class Display {
 
   SDL_Surface* render_text_with_fallback(const std::string& text);
 
-  SDL_Texture* get_video_texture(float scale_factor) const;
+  SDL_Texture* get_video_texture(bool is_downscale) const;
   void update_texture(const SDL_Rect* rect, const void* pixels, int pitch, const std::string& message);
-  void render_copy_downscaled(SDL_Texture* texture, const SDL_Rect* src_rect, const SDL_FRect* dst_rect, float current_scale);
+
+  // Lanczos 缩放渲染：将 src_pixels 用 Lanczos 缩放到 dst 尺寸，上传纹理后 1:1 渲染
+  void render_lanczos(LanczosTexCache& cache,
+                      const uint8_t* src_pixels, int src_pitch,
+                      int src_w, int src_h,
+                      const SDL_FRect* dst_rect);
 
   int round_and_clamp(const float value);
 

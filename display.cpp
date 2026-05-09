@@ -383,7 +383,10 @@ Display::Display(const int display_number,
   pan_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
   selection_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
 
-  // SDL_RenderSetLogicalSize(renderer_, drawable_width_, drawable_height_);
+  // 将 renderer 逻辑坐标系设为物理像素大小（HiDPI 1:1 锐利渲染）
+  // 代码里所有绘制坐标均使用 drawable_width_/height_（物理像素），
+  // 设置 LogicalSize = drawable 尺寸后，SDL 不再对绘制内容做额外插值缩放。
+  SDL_RenderSetLogicalSize(renderer_, drawable_width_, drawable_height_);
 
   // 创建两个视频纹理：linear 用于缩小时消除网格，nearest 用于放大/1:1时保持像素锐利
   auto create_video_texture = [&](const std::string& scale_quality) {
@@ -498,11 +501,9 @@ Display::~Display() {
   SDL_DestroyTexture(video_texture_linear_);
   SDL_DestroyTexture(video_texture_nn_);
 
-  // 清理缓存的渐进式缩放 render target
-  for (auto& rt : downscale_rt_cache_) {
-    if (rt.texture) SDL_DestroyTexture(rt.texture);
-  }
-  downscale_rt_cache_.clear();
+  // 清理 Lanczos 缩放纹理缓存
+  if (lanczos_tex_left_.texture) SDL_DestroyTexture(lanczos_tex_left_.texture);
+  if (lanczos_tex_right_.texture) SDL_DestroyTexture(lanczos_tex_right_.texture);
   SDL_DestroyTexture(side_ui_[LEFT.as_simple_index()].text_texture);
   SDL_DestroyTexture(side_ui_[RIGHT.as_simple_index()].text_texture);
 
@@ -1080,13 +1081,10 @@ void Display::render_progress_dots(const float position, const float progress, c
   }
 }
 
-SDL_Texture* Display::get_video_texture(float scale_factor) const {
-  // 当用户强制选择 bilinear 模式时，始终使用 linear 纹理
-  // 否则自动根据缩放比选择：缩小时用 linear（消除网格伪影），放大或1:1时用 nearest（保持像素锐利）
-  if (bilinear_texture_filtering_) {
-    return video_texture_linear_;
-  }
-  return (scale_factor < 1.0f) ? video_texture_linear_ : video_texture_nn_;
+SDL_Texture* Display::get_video_texture(bool is_downscale) const {
+  // bilinear 强制模式，或缩小场景：使用 linear 纹理（消除网格伪影）
+  // 放大/1:1 场景：使用 nearest 纹理（保持像素锐利）
+  return (bilinear_texture_filtering_ || is_downscale) ? video_texture_linear_ : video_texture_nn_;
 }
 
 void Display::update_texture(const SDL_Rect* rect, const void* pixels, int pitch, const std::string& message) {
@@ -1095,98 +1093,61 @@ void Display::update_texture(const SDL_Rect* rect, const void* pixels, int pitch
   check_sdl(SDL_UpdateTexture(video_texture_nn_, rect, pixels, pitch) == 0, "video texture nn - " + message);
 }
 
-void Display::render_copy_downscaled(SDL_Texture* texture, const SDL_Rect* src_rect, const SDL_FRect* dst_rect, float current_scale) {
-  // 放大或 1:1 时，直接渲染，无需额外处理
-  if (current_scale >= 1.0f) {
-    check_sdl(SDL_RenderCopyF(renderer_, texture, src_rect, dst_rect) == 0, "direct render copy");
-    return;
-  }
 
-  // ===== 缩小场景：使用渐进式缩放消除摩尔纹/网格伪影 =====
-  //
-  // 为什么正常播放器（mpv/VLC）缩小时不会有网格？
-  // 因为它们使用 GPU shader 实现的高质量缩放算法（Lanczos/spline），采样窗口远大于 2×2。
-  // SDL2 只提供 nearest 和 bilinear（2×2 采样），在缩小时采样不足会产生摩尔纹。
-  //
-  // 解决方案：通过中间 render target 逐级缩小（每级最多 2x），
-  // 确保每一步的缩小比例都在 bilinear 的有效范围内，模拟 mipmap 效果。
-
-  int src_w = src_rect->w;
-  int src_h = src_rect->h;
-  int dst_w = static_cast<int>(std::ceil(dst_rect->w));
-  int dst_h = static_cast<int>(std::ceil(dst_rect->h));
+void Display::render_lanczos(LanczosTexCache& cache,
+                              const uint8_t* src_pixels, int src_pitch,
+                              int src_w, int src_h,
+                              const SDL_FRect* dst_rect) {
+  // 目标尺寸：四舍五入到整数像素。
+  // 注意：不能用 ceil，否则纹理尺寸比实际渲染区域大 1px，
+  // SDL nearest 过滤会在边缘重复最后一列/行像素，产生周期性条纹（网格伪影）。
+  const int dst_w = static_cast<int>(std::round(dst_rect->w));
+  const int dst_h = static_cast<int>(std::round(dst_rect->h));
 
   if (dst_w <= 0 || dst_h <= 0) return;
 
-  // 计算中间缩放级别
-  // 每级缩小约 2x，直到中间尺寸与目标尺寸的比例 <= 2x
-  struct MipLevel {
-    int w, h;
+  // ===== Bicubic 高质量缩放（8bpc RGB24）=====
+  // 使用 FFmpeg libswscale SWS_BICUBIC，
+  // 相比 SDL2 bilinear（2×2 采样）能保留更多高频细节，消除 Bilinear Blur。
+  // 注意：此函数仅在 8bpc + 缩小场景下被调用（调用方已做 !use_10_bpc_ 判断）。
+  const uint8_t* scaled = lanczos_scaler_.scale(
+      src_pixels, src_pitch,
+      src_w, src_h,
+      dst_w, dst_h,
+      false /* 8bpc */);
+
+  const int scaled_pitch = lanczos_scaler_.dst_pitch();
+
+  // 创建或复用缓存纹理（尺寸变化时重建）
+  // 固定使用 RGB24（10bpc 已在上方提前 return）
+  const Uint32 tex_fmt = SDL_PIXELFORMAT_RGB24;
+  if (!cache.texture || cache.dst_w != dst_w || cache.dst_h != dst_h) {
+    if (cache.texture) SDL_DestroyTexture(cache.texture);
+    // nearest 过滤：纹理已是目标尺寸，1:1 渲染不需要插值
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+    cache.texture = SDL_CreateTexture(renderer_, tex_fmt, SDL_TEXTUREACCESS_STREAMING, dst_w, dst_h);
+    cache.dst_w = dst_w;
+    cache.dst_h = dst_h;
+    cache.is_10bpc = false;
+    if (!cache.texture) {
+      // 创建失败，回退到直接渲染原始纹理
+      check_sdl(SDL_RenderCopyF(renderer_, video_texture_nn_, nullptr, dst_rect) == 0, "lanczos fallback render copy");
+      return;
+    }
+  }
+
+  // 上传 Bicubic 缩放后的像素到小纹理
+  check_sdl(SDL_UpdateTexture(cache.texture, nullptr, scaled, scaled_pitch) == 0, "lanczos texture update");
+
+  // 渲染到屏幕目标位置：使用整数对齐的 rect，消除亚像素偏差导致的边缘条纹。
+  // SDL_RenderCopy（整数版）比 SDL_RenderCopyF 更能保证 nearest 模式下的 1:1 像素对齐。
+  const SDL_Rect dst_rect_int = {
+      static_cast<int>(std::round(dst_rect->x)),
+      static_cast<int>(std::round(dst_rect->y)),
+      dst_w,
+      dst_h
   };
-  std::vector<MipLevel> levels;
-  int cur_w = src_w;
-  int cur_h = src_h;
-  while (cur_w > dst_w * 2 || cur_h > dst_h * 2) {
-    cur_w = std::max(1, cur_w / 2);
-    cur_h = std::max(1, cur_h / 2);
-    levels.push_back({cur_w, cur_h});
-  }
-
-  // 即使不需要中间级（缩小比例在 0.5~1.0 之间），也通过一个中间 render target
-  // 做一次高质量缩放，避免 SDL2 bilinear 直接缩放时的采样不足问题
-  if (levels.empty()) {
-    // 缩小比例在 0.5~1.0 之间，创建一个与目标尺寸相同的中间 RT
-    // 先用 bilinear 渲染到精确目标尺寸的 RT，再 1:1 拷贝到屏幕
-    // 这比直接 SDL_RenderCopyF 更可靠，因为 RT 的 bilinear 采样更精确
-    levels.push_back({dst_w, dst_h});
-  }
-
-  // 获取纹理的像素格式
-  Uint32 tex_format;
-  SDL_QueryTexture(texture, &tex_format, nullptr, nullptr, nullptr);
-
-  // 使用缓存的 render target，避免每帧重复创建/销毁纹理
-  // 如果缓存数量不匹配，重建缓存
-  if (downscale_rt_cache_.size() != levels.size()) {
-    for (auto& rt : downscale_rt_cache_) {
-      if (rt.texture) SDL_DestroyTexture(rt.texture);
-    }
-    downscale_rt_cache_.clear();
-    downscale_rt_cache_.resize(levels.size());
-  }
-
-  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-
-  SDL_Texture* prev_texture = texture;
-  SDL_Rect prev_src = *src_rect;
-
-  for (size_t i = 0; i < levels.size(); i++) {
-    auto& cached = downscale_rt_cache_[i];
-
-    // 如果缓存的 RT 尺寸不匹配，重新创建
-    if (!cached.texture || cached.w != levels[i].w || cached.h != levels[i].h) {
-      if (cached.texture) SDL_DestroyTexture(cached.texture);
-      cached.texture = SDL_CreateTexture(renderer_, tex_format, SDL_TEXTUREACCESS_TARGET, levels[i].w, levels[i].h);
-      cached.w = levels[i].w;
-      cached.h = levels[i].h;
-      if (!cached.texture) {
-        // 创建失败，回退到直接渲染
-        check_sdl(SDL_RenderCopyF(renderer_, texture, src_rect, dst_rect) == 0, "fallback render copy");
-        SDL_SetRenderTarget(renderer_, nullptr);
-        return;
-      }
-    }
-
-    SDL_SetRenderTarget(renderer_, cached.texture);
-    SDL_RenderCopy(renderer_, prev_texture, &prev_src, nullptr);
-
-    prev_texture = cached.texture;
-    prev_src = {0, 0, levels[i].w, levels[i].h};
-  }
-
-  // 最后一步：从最后一级中间纹理渲染到屏幕目标位置
-  SDL_SetRenderTarget(renderer_, nullptr);
-  check_sdl(SDL_RenderCopyF(renderer_, prev_texture, &prev_src, dst_rect) == 0, "final downscaled render copy");
+  check_sdl(SDL_RenderCopy(renderer_, cache.texture, nullptr, &dst_rect_int) == 0, "lanczos render copy");
 }
 
 int Display::round_and_clamp(const float value) {
@@ -2041,12 +2002,6 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   const float video_mouse_x = zoom_rect.start.x() + ratio_x * zoom_rect.size.x();
 
   if (show_left_ || show_right_) {
-    // 根据当前缩放比动态选择纹理过滤模式
-    // zoom_rect.zoom_factor 表示可见区域占视频总尺寸的比例（越小=越放大，越大=越缩小）
-    // 实际缩放比 = 视口像素宽度 / 实际显示的视频像素宽度
-    const float visible_video_w = total_video_w * zoom_rect.zoom_factor;
-    const float current_scale = static_cast<float>(viewport_rect_.w) / visible_video_w;
-
     const int split_x = (compare_mode && mode_ == Mode::SPLIT) ? clamp_range(std::round(video_mouse_x), 0.0F, float(video_width_)) : show_left_ ? video_width_ : 0;
 
     // update video
@@ -2054,17 +2009,34 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       const SDL_Rect tex_render_quad_left = {0, 0, split_x, video_height_};
       const SDL_FRect screen_render_quad_left = video_rect_to_drawable_transform(video_to_zoom_space(tex_render_quad_left, zoom_rect));
 
-      if (input_received_ || has_updated_left_pts) {
-        if (use_10_bpc_) {
-          convert_to_packed_10_bpc(planes_left, pitches_left, left_planes_, pitches_left, tex_render_quad_left);
-
-          update_texture(&tex_render_quad_left, left_planes_[0], pitches_left[0], "left update (10 bpc, video mode)");
+      // 直接比较屏幕显示尺寸和视频源尺寸：屏幕宽 < 视频宽 → 缩小场景，需要 Bicubic
+      const bool is_downscale_left = screen_render_quad_left.w < static_cast<float>(split_x);
+      if (is_downscale_left && !use_10_bpc_) {
+        // ===== 缩小场景（8bpc）：Bicubic 高质量缩放路径 =====
+        // 直接从原始像素数据做 Bicubic 缩放，上传小纹理后 1:1 渲染，
+        // 避免 SDL2 nearest 在缩小时产生网格伪影。
+        if (input_received_ || has_updated_left_pts) {
+          render_lanczos(lanczos_tex_left_,
+                         planes_left[0], static_cast<int>(pitches_left[0]),
+                         split_x, video_height_, &screen_render_quad_left);
         } else {
-          update_texture(&tex_render_quad_left, planes_left[0], pitches_left[0], "left update (video mode)");
+          // 帧未更新，直接复用缓存纹理渲染
+          if (lanczos_tex_left_.texture) {
+            check_sdl(SDL_RenderCopyF(renderer_, lanczos_tex_left_.texture, nullptr, &screen_render_quad_left) == 0, "lanczos left cached render");
+          }
         }
+      } else {
+        // ===== 放大/1:1 场景，或 10bpc 场景：nearest/linear 纹理直接渲染 =====
+        if (input_received_ || has_updated_left_pts) {
+          if (use_10_bpc_) {
+            convert_to_packed_10_bpc(planes_left, pitches_left, left_planes_, pitches_left, tex_render_quad_left);
+            update_texture(&tex_render_quad_left, left_planes_[0], pitches_left[0], "left update (10 bpc, video mode)");
+          } else {
+            update_texture(&tex_render_quad_left, planes_left[0], pitches_left[0], "left update (video mode)");
+          }
+        }
+        check_sdl(SDL_RenderCopyF(renderer_, get_video_texture(is_downscale_left), &tex_render_quad_left, &screen_render_quad_left) == 0, "render copy left");
       }
-
-      render_copy_downscaled(get_video_texture(current_scale), &tex_render_quad_left, &screen_render_quad_left, current_scale);
     }
     if (show_right_ && ((split_x < video_width_) || mode_ != Mode::SPLIT)) {
       const int start_right = (mode_ == Mode::SPLIT) ? std::max(split_x, 0) : 0;
@@ -2075,29 +2047,49 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       const SDL_Rect roi = {start_right, 0, (video_width_ - start_right), video_height_};
       const SDL_FRect screen_render_quad_right = video_rect_to_drawable_transform(video_to_zoom_space(tex_render_quad_right, zoom_rect));
 
-      if (input_received_ || has_updated_right_pts) {
-        if (subtraction_mode_) {
-          update_difference(planes_left, pitches_left, planes_right, pitches_right, start_right);
-
-          if (use_10_bpc_) {
-            convert_to_packed_10_bpc(diff_planes_, diff_pitches_, right_planes_, pitches_right, roi);
-
-            update_texture(&tex_render_quad_right, right_planes_[0] + start_right, pitches_right[0], "right update (10 bpc, subtraction mode)");
+      // 直接比较屏幕显示尺寸和视频源尺寸：屏幕宽 < 视频宽 → 缩小场景，需要 Bicubic
+      const bool is_downscale_right = screen_render_quad_right.w < static_cast<float>(video_width_ - start_right);
+      if (is_downscale_right && !use_10_bpc_) {
+        // ===== 缩小场景（8bpc）：Bicubic 高质量缩放路径 =====
+        if (input_received_ || has_updated_right_pts) {
+          if (subtraction_mode_) {
+            update_difference(planes_left, pitches_left, planes_right, pitches_right, start_right);
+            render_lanczos(lanczos_tex_right_,
+                           diff_planes_[0] + start_right * 3, static_cast<int>(diff_pitches_[0]),
+                           video_width_ - start_right, video_height_, &screen_render_quad_right);
           } else {
-            update_texture(&tex_render_quad_right, diff_planes_[0] + start_right * 3, diff_pitches_[0], "right update (subtraction mode)");
+            render_lanczos(lanczos_tex_right_,
+                           planes_right[0] + start_right * 3, static_cast<int>(pitches_right[0]),
+                           video_width_ - start_right, video_height_, &screen_render_quad_right);
           }
         } else {
-          if (use_10_bpc_) {
-            convert_to_packed_10_bpc(planes_right, pitches_right, right_planes_, pitches_right, roi);
-
-            update_texture(&tex_render_quad_right, right_planes_[0] + start_right, pitches_right[0], "right update (10 bpc, video mode)");
-          } else {
-            update_texture(&tex_render_quad_right, planes_right[0] + start_right * 3, pitches_right[0], "right update (video mode)");
+          // 帧未更新，直接复用缓存纹理渲染
+          if (lanczos_tex_right_.texture) {
+            check_sdl(SDL_RenderCopyF(renderer_, lanczos_tex_right_.texture, nullptr, &screen_render_quad_right) == 0, "lanczos right cached render");
           }
         }
+      } else {
+        // ===== 放大/1:1 场景，或 10bpc 场景：nearest/linear 纹理直接渲染 =====
+        if (input_received_ || has_updated_right_pts) {
+          if (subtraction_mode_) {
+            update_difference(planes_left, pitches_left, planes_right, pitches_right, start_right);
+            if (use_10_bpc_) {
+              convert_to_packed_10_bpc(diff_planes_, diff_pitches_, right_planes_, pitches_right, roi);
+              update_texture(&tex_render_quad_right, right_planes_[0] + start_right, pitches_right[0], "right update (10 bpc, subtraction mode)");
+            } else {
+              update_texture(&tex_render_quad_right, diff_planes_[0] + start_right * 3, diff_pitches_[0], "right update (subtraction mode)");
+            }
+          } else {
+            if (use_10_bpc_) {
+              convert_to_packed_10_bpc(planes_right, pitches_right, right_planes_, pitches_right, roi);
+              update_texture(&tex_render_quad_right, right_planes_[0] + start_right, pitches_right[0], "right update (10 bpc, video mode)");
+            } else {
+              update_texture(&tex_render_quad_right, planes_right[0] + start_right * 3, pitches_right[0], "right update (video mode)");
+            }
+          }
+        }
+        check_sdl(SDL_RenderCopyF(renderer_, get_video_texture(is_downscale_right), &tex_render_quad_right, &screen_render_quad_right) == 0, "render copy right");
       }
-
-      render_copy_downscaled(get_video_texture(current_scale), &tex_render_quad_right, &screen_render_quad_right, current_scale);
     }
   }
 
@@ -2753,11 +2745,8 @@ void Display::handle_event(const SDL_Event& event) {
 
           update_viewport();
 
-          // Important: keep renderer logical coordinates in WINDOW points, not drawable pixels.
-          // Otherwise SDL will apply an extra scale step on HiDPI displays, which often ends up
-          // as a non-integer resample after the resize gesture ends (blurry output).
-          // SDL_RenderSetLogicalSize(renderer_, window_width_, window_height_);
-          // SDL_RenderSetScale(renderer_, drawable_to_window_width_factor_, drawable_to_window_height_factor_);
+          // resize 结束后同步更新 LogicalSize，保持物理像素坐标系（HiDPI 1:1 锐利）
+          SDL_RenderSetLogicalSize(renderer_, drawable_width_, drawable_height_);
           break;
         }
         case SDL_WINDOWEVENT_LEAVE:
@@ -3299,3 +3288,86 @@ size_t Display::get_num_right_videos() const {
 size_t Display::get_active_right_index() const {
   return active_right_index_;
 }
+
+// ── LanczosScaler 实现（内联自 lanczos_scaler.cpp）────────────────────────
+
+LanczosScaler::~LanczosScaler() {
+  free_context();
+}
+
+void LanczosScaler::free_context() {
+  if (sws_ctx_) {
+    sws_freeContext(sws_ctx_);
+    sws_ctx_ = nullptr;
+  }
+}
+
+void LanczosScaler::ensure_context(int src_w, int src_h, int dst_w, int dst_h, bool is_10bpc) {
+  if (sws_ctx_ &&
+      ctx_src_w_ == src_w && ctx_src_h_ == src_h &&
+      ctx_dst_w_ == dst_w && ctx_dst_h_ == dst_h &&
+      ctx_is_10bpc_ == is_10bpc) {
+    return;
+  }
+
+  free_context();
+
+  const AVPixelFormat fmt = is_10bpc ? AV_PIX_FMT_RGB48BE : AV_PIX_FMT_RGB24;
+
+  // SWS_BICUBIC（Mitchell-Netravali）：无负瓣 → 无振铃/网格伪影，
+  // 比 bilinear 锐利（4×4 采样窗口），是 mpv/VLC 的默认缩小算法。
+  sws_ctx_ = sws_getContext(
+      src_w, src_h, fmt,
+      dst_w, dst_h, fmt,
+      SWS_BICUBIC | SWS_FULL_CHR_H_INT | SWS_ACCURATE_RND,
+      nullptr, nullptr, nullptr);
+
+  if (!sws_ctx_) {
+    throw std::runtime_error{"LanczosScaler: sws_getContext failed"};
+  }
+
+  ctx_src_w_ = src_w;
+  ctx_src_h_ = src_h;
+  ctx_dst_w_ = dst_w;
+  ctx_dst_h_ = dst_h;
+  ctx_is_10bpc_ = is_10bpc;
+}
+
+void LanczosScaler::ensure_buffer(int dst_w, int dst_h, bool is_10bpc) {
+  const int bytes_per_pixel = is_10bpc ? 6 : 3;
+  dst_pitch_ = dst_w * bytes_per_pixel;
+  const size_t needed = static_cast<size_t>(dst_pitch_) * dst_h;
+  if (buffer_.size() < needed) {
+    buffer_.resize(needed);
+  }
+}
+
+const uint8_t* LanczosScaler::scale(const uint8_t* src_pixels, int src_pitch,
+                                     int src_w, int src_h,
+                                     int dst_w, int dst_h,
+                                     bool is_10bpc) {
+  if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0) {
+    return src_pixels;
+  }
+
+  if (src_w == dst_w && src_h == dst_h) {
+    dst_pitch_ = src_pitch;
+    return src_pixels;
+  }
+
+  ensure_context(src_w, src_h, dst_w, dst_h, is_10bpc);
+  ensure_buffer(dst_w, dst_h, is_10bpc);
+
+  const uint8_t* src_data[4] = {src_pixels, nullptr, nullptr, nullptr};
+  const int src_linesize[4] = {src_pitch, 0, 0, 0};
+
+  uint8_t* dst_data[4] = {buffer_.data(), nullptr, nullptr, nullptr};
+  const int dst_linesize[4] = {dst_pitch_, 0, 0, 0};
+
+  sws_scale(sws_ctx_,
+            src_data, src_linesize, 0, src_h,
+            dst_data, dst_linesize);
+
+  return buffer_.data();
+}
+// ── LanczosScaler end ──────────────────────────────────────────────────────
