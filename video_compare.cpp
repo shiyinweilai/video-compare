@@ -177,7 +177,7 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
   install_processor(demuxers_, ReadyToSeek::DEMULTIPLEXER, LEFT, std::make_unique<Demuxer>(LEFT, config.left.demuxer, config.left.file_name, config.left.demuxer_options, config.left.decoder_options));
   install_processor(
       video_decoders_, ReadyToSeek::DECODER, LEFT,
-      std::make_unique<VideoDecoder>(LEFT, config.left.decoder, config.left.hw_accel_spec, demuxers_[LEFT]->video_codec_parameters(), config.left.peak_luminance_nits, config.left.hw_accel_options, config.left.decoder_options));
+      std::make_unique<VideoDecoder>(LEFT, config.left.decoder, config.left.hw_accel_spec, demuxers_[LEFT]->video_codec_parameters(), UNSET_PEAK_LUMINANCE, config.left.hw_accel_options, config.left.decoder_options));
 
   // Initialize all right video demuxers and decoders
   for (size_t i = 0; i < config.right_videos.size(); ++i) {
@@ -189,24 +189,23 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
 
     install_processor(demuxers_, ReadyToSeek::DEMULTIPLEXER, right_side, std::make_unique<Demuxer>(right_side, right_config.demuxer, right_config.file_name, right_config.demuxer_options, right_config.decoder_options));
     install_processor(video_decoders_, ReadyToSeek::DECODER, right_side,
-                      std::make_unique<VideoDecoder>(right_side, right_config.decoder, right_config.hw_accel_spec, demuxers_[right_side]->video_codec_parameters(), right_config.peak_luminance_nits, right_config.hw_accel_options,
+                      std::make_unique<VideoDecoder>(right_side, right_config.decoder, right_config.hw_accel_spec, demuxers_[right_side]->video_codec_parameters(), UNSET_PEAK_LUMINANCE, right_config.hw_accel_options,
                                                      right_config.decoder_options));
   }
 
   // Create VideoFilterContext to manage all videos for consistent auto-filter determination
   VideoFilterContext video_filter_context;
-  video_filter_context.add(LEFT, demuxers_[LEFT].get(), video_decoders_[LEFT].get(), config.left.color_trc);
+  video_filter_context.add(LEFT, demuxers_[LEFT].get(), video_decoders_[LEFT].get());
 
   for (size_t i = 0; i < config.right_videos.size(); ++i) {
     const auto& right_config = config.right_videos[i];
     Side right_side = Side::Right(i);
-    video_filter_context.add(right_side, demuxers_[right_side].get(), video_decoders_[right_side].get(), right_config.color_trc);
+    video_filter_context.add(right_side, demuxers_[right_side].get(), video_decoders_[right_side].get());
   }
 
   // Initialize filterers using VideoFilterContext for consistent auto-filter determination
   install_processor(video_filterers_, ReadyToSeek::FILTERER, LEFT,
-                    std::make_unique<VideoFilterer>(LEFT, demuxers_[LEFT].get(), video_decoders_[LEFT].get(), config.left.tone_mapping_mode, config.left.boost_tone, config.left.video_filters, config.left.color_space,
-                                                    config.left.color_range, config.left.color_primaries, config.left.color_trc, &video_filter_context, config.disable_auto_filters));
+                    std::make_unique<VideoFilterer>(LEFT, demuxers_[LEFT].get(), video_decoders_[LEFT].get(), &video_filter_context));
 
   // For each right video, use VideoFilterContext for auto-filter determination
   for (size_t i = 0; i < config.right_videos.size(); ++i) {
@@ -214,8 +213,7 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
     Side right_side = Side::Right(i);
 
     install_processor(video_filterers_, ReadyToSeek::FILTERER, right_side,
-                      std::make_unique<VideoFilterer>(right_side, demuxers_[right_side].get(), video_decoders_[right_side].get(), right_config.tone_mapping_mode, right_config.boost_tone, right_config.video_filters, right_config.color_space,
-                                                      right_config.color_range, right_config.color_primaries, right_config.color_trc, &video_filter_context, config.disable_auto_filters));
+                      std::make_unique<VideoFilterer>(right_side, demuxers_[right_side].get(), video_decoders_[right_side].get(), &video_filter_context));
   }
 
   // Calculate max dimensions from all videos
@@ -239,8 +237,8 @@ VideoCompare::VideoCompare(const VideoCompareConfig& config)
 
   // Initialize display (use first right video's filename)
   display_ =
-      std::make_unique<Display>(config.display_number, config.display_mode, config.verbose, config.fit_window_to_usable_bounds, config.high_dpi_allowed, config.use_10_bpc, initial_fast_input_alignment_, config.bilinear_texture_filtering,
-                                config.window_size, max_width_, max_height_, shortest_duration_, config.wheel_sensitivity, config.start_in_subtraction_mode, config.left.file_name, first_right.file_name);
+      std::make_unique<Display>(config.display_number, config.display_mode, config.fit_window_to_usable_bounds, config.high_dpi_allowed, config.use_10_bpc, initial_fast_input_alignment_, config.bilinear_texture_filtering,
+                                config.window_size, max_width_, max_height_, shortest_duration_, config.left.file_name, first_right.file_name);
 
   // Set number of right videos in display
   display_->set_num_right_videos(config.right_videos.size());

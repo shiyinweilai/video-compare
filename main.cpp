@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <vector>
 #include "argagg.h"
-#include "controls.h"
 #include "side_aware_logger.h"
 #include "string_utils.h"
 #include "version.h"
@@ -101,126 +100,7 @@ void free_argv(int argc, char** argv) {
 }
 #endif
 
-void print_controls() {
-  std::cout << "Controls:" << std::endl << std::endl;
 
-  for (auto& key_description_pair : get_controls()) {
-    std::cout << string_sprintf(" %-12s %s", key_description_pair.first.c_str(), key_description_pair.second.c_str()) << std::endl;
-  }
-
-  for (auto& instruction : get_instructions()) {
-    std::cout << std::endl;
-
-    print_wrapped(instruction, 80);
-  }
-}
-
-void find_matching_video_filters(const std::string& search_string) {
-  const AVFilter* filter = nullptr;
-  void* i = 0;
-
-  std::cout << "Filters:" << std::endl << std::endl;
-
-  while ((filter = av_filter_iterate(&i))) {
-#if (LIBAVFILTER_VERSION_INT < AV_VERSION_INT(8, 24, 100))
-    if (avfilter_pad_count(filter->inputs) >= 1 && avfilter_pad_count(filter->outputs) >= 1) {
-#else
-    if (avfilter_filter_pad_count(filter, 0) >= 1 && avfilter_filter_pad_count(filter, 1) >= 1) {
-#endif
-      if (avfilter_pad_get_type(filter->inputs, 0) == AVMEDIA_TYPE_VIDEO && avfilter_pad_get_type(filter->outputs, 0) == AVMEDIA_TYPE_VIDEO) {
-        std::string filter_name(filter->name);
-        std::string filter_description(filter->description);
-
-        auto name_it = string_ci_find(filter_name, search_string);
-        auto description_it = string_ci_find(filter_description, search_string);
-
-        if (name_it != filter_name.end() || description_it != filter_description.end()) {
-          std::cout << string_sprintf(" %-20s %s", filter_name.c_str(), filter_description.c_str()) << std::endl;
-        }
-      }
-    }
-  }
-}
-
-void find_matching_video_demuxers(const std::string& search_string) {
-  const AVInputFormat* demuxer = nullptr;
-  void* i = 0;
-
-  std::cout << "Demuxers:" << std::endl << std::endl;
-
-  while ((demuxer = av_demuxer_iterate(&i))) {
-    std::string demuxer_name(demuxer->name);
-    std::string demuxer_long_name(demuxer->long_name);
-
-    auto name_it = string_ci_find(demuxer_name, search_string);
-    auto long_name_it = string_ci_find(demuxer_long_name, search_string);
-
-    if (name_it != demuxer_name.end() || long_name_it != demuxer_long_name.end()) {
-      std::cout << string_sprintf(" %-24s %s", demuxer_name.c_str(), demuxer_long_name.c_str()) << std::endl;
-    }
-  }
-}
-
-void find_matching_input_protocols(const std::string& search_string) {
-  const char* protocol = nullptr;
-  void* i = 0;
-
-  std::cout << "Input protocols:" << std::endl << std::endl;
-
-  while ((protocol = avio_enum_protocols(&i, 0))) {
-    std::string protocol_name(protocol);
-
-    auto name_it = string_ci_find(protocol_name, search_string);
-
-    if (name_it != protocol_name.end()) {
-      std::cout << string_sprintf(" %s", protocol_name.c_str()) << std::endl;
-    }
-  }
-}
-
-void find_matching_video_decoders(const std::string& search_string) {
-  const AVCodec* codec = nullptr;
-  void* i = 0;
-
-  std::cout << "Decoders:" << std::endl;
-  std::cout << " A.. = Backed by hardware implementation" << std::endl;
-  std::cout << " .Y. = Potentially backed by a hardware implementation, but not necessarily" << std::endl;
-  std::cout << " ..X = Decoder is experimental" << std::endl << std::endl;
-
-  while ((codec = av_codec_iterate(&i))) {
-    if (codec->type == AVMEDIA_TYPE_VIDEO && av_codec_is_decoder(codec)) {
-      std::string codec_name(codec->name);
-      std::string codec_long_name(codec->long_name);
-
-      auto name_it = string_ci_find(codec_name, search_string);
-      auto long_name_it = string_ci_find(codec_long_name, search_string);
-
-      if (name_it != codec_name.end() || long_name_it != codec_long_name.end()) {
-        std::string capability = (codec->capabilities & AV_CODEC_CAP_HARDWARE) ? "A" : ".";
-        capability += (codec->capabilities & AV_CODEC_CAP_HYBRID) ? "Y" : ".";
-        capability += (codec->capabilities & AV_CODEC_CAP_EXPERIMENTAL) ? "X" : ".";
-
-        std::cout << string_sprintf(" %s %-18s %s", capability.c_str(), codec_name.c_str(), codec_long_name.c_str()) << std::endl;
-      }
-    }
-  }
-}
-
-void find_matching_hw_accels(const std::string& search_string) {
-  AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
-
-  std::cout << "Hardware acceleration methods:" << std::endl << std::endl;
-
-  while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE) {
-    std::string hw_accel_method(av_hwdevice_get_type_name(type));
-
-    auto name_it = string_ci_find(hw_accel_method, search_string);
-
-    if (name_it != hw_accel_method.end()) {
-      std::cout << string_sprintf(" %s", hw_accel_method.c_str()) << std::endl;
-    }
-  }
-}
 
 TimeShiftConfig parse_time_shift(const std::string& time_shift_arg) {
   TimeShiftConfig config;
@@ -364,48 +244,7 @@ void resolve_mutual_placeholders(std::string& left, std::string& right, const st
   }
 }
 
-ToneMapping parse_tone_mapping_mode(const std::string& mode) {
-  if (mode.empty() || mode == "auto") {
-    return ToneMapping::AUTO;
-  } else if (mode == "off") {
-    return ToneMapping::OFF;
-  } else if (mode == "on") {
-    return ToneMapping::FULLRANGE;
-  } else if (mode == "rel") {
-    return ToneMapping::RELATIVE;
-  } else {
-    throw std::logic_error{"Cannot parse tone mapping mode (valid options: auto, off, on, rel)"};
-  }
-}
 
-unsigned parse_peak_nits(const std::string& nits_str) {
-  if (nits_str.empty()) {
-    return 0;
-  }
-  const std::regex peak_nits_re("(\\d*)");
-  if (!std::regex_match(nits_str, peak_nits_re)) {
-    throw std::logic_error{"Cannot parse peak nits (required format: [number], e.g. 400, 850 or 1000)"};
-  }
-  int nits = std::stoi(nits_str);
-  if (nits < 1) {
-    throw std::logic_error{"peak nits must be at least 1"};
-  }
-  if (nits > 10000) {
-    throw std::logic_error{"peak nits must not be more than 10000"};
-  }
-  return static_cast<unsigned>(nits);
-}
-
-float parse_boost_tone(const std::string& boost_str) {
-  if (boost_str.empty()) {
-    return 1.0;
-  }
-  const std::regex boost_tone_re("^([0-9]+([.][0-9]*)?|[.][0-9]+)$");
-  if (!std::regex_match(boost_str, boost_tone_re)) {
-    throw std::logic_error{"Cannot parse boost tone; must be a valid number, e.g. 1.3 or 3.0"};
-  }
-  return static_cast<float>(parse_strict_double(boost_str));
-}
 
 // Parse an FFmpeg parameter spec string (format: "name[:options]" or "name:device:options" for hwaccel)
 // Returns the main value and sets options in the provided AVDictionary
@@ -465,22 +304,6 @@ void apply_right_video_spec(InputVideo& video, const RightVideoSpec& spec, const
     return (it != spec.params.end()) ? &it->second : nullptr;
   };
 
-  if (const std::string* val = get_param("filters")) {
-    video.video_filters = safe_replace_placeholder(*val, template_video.video_filters, "filter specification");
-  }
-  if (const std::string* val = get_param("color-space")) {
-    video.color_space = *val;
-  }
-  if (const std::string* val = get_param("color-range")) {
-    video.color_range = *val;
-  }
-  if (const std::string* val = get_param("color-primaries")) {
-    video.color_primaries = *val;
-  }
-  if (const std::string* val = get_param("color-trc")) {
-    video.color_trc = *val;
-  }
-
   if (const std::string* val = get_param("decoder")) {
     video.decoder = parse_ffmpeg_param_spec(*val, template_video.decoder, video.decoder_options, "decoder", 1, false, false);
   }
@@ -491,15 +314,6 @@ void apply_right_video_spec(InputVideo& video, const RightVideoSpec& spec, const
     video.hw_accel_spec = parse_ffmpeg_param_spec(*val, template_video.hw_accel_spec, video.hw_accel_options, "hardware acceleration", 2, false, true);
   }
 
-  if (const std::string* val = get_param("tone-map-mode")) {
-    video.tone_mapping_mode = parse_tone_mapping_mode(*val);
-  }
-  if (const std::string* val = get_param("peak-nits")) {
-    video.peak_luminance_nits = parse_peak_nits(*val);
-  }
-  if (const std::string* val = get_param("boost-tone")) {
-    video.boost_tone = parse_boost_tone(*val);
-  }
 }
 
 int main(int argc, char** argv) {
@@ -516,16 +330,12 @@ int main(int argc, char** argv) {
 #endif
 
   try {
-    argagg::parser argparser{
-        {{"help", {"-h", "--help"}, "print help and exit", 0},
-         {"show-controls", {"-c", "--show-controls"}, "print controls and exit", 0},
-         {"verbose", {"-v", "--verbose"}, "enable verbose output, including information such as library versions and rendering details", 0},
-         {"high-dpi", {"-d", "--high-dpi"}, "allow high DPI mode for e.g. displaying UHD content on Retina displays", 0},
+    argagg::parser argparser{{
+        {"high-dpi", {"-d", "--high-dpi"}, "allow high DPI mode for e.g. displaying UHD content on Retina displays", 0},
          {"no-high-dpi", {"--no-high-dpi"}, "disable high DPI mode (default on non-macOS systems)", 0},
          {"10-bpc", {"-b", "--10-bpc"}, "use 10 bits per color component instead of 8", 0},
          {"fast-alignment", {"-F", "--fast-alignment"}, "toggle fast bilinear scaling for aligning input source resolutions, replacing high-quality bicubic and chroma-accurate interpolation", 0},
          {"bilinear-texture", {"-I", "--bilinear-texture"}, "toggle bilinear video texture interpolation, replacing nearest-neighbor filtering", 0},
-         {"subtraction-mode", {"-S", "--subtraction-mode"}, "start in subtraction (difference) view", 0},
          {"display-number", {"-n", "--display-number"}, "open main window on specific display (e.g. 0, 1 or 2), default is 0", 1},
          {"display-mode", {"-m", "--mode"}, "display mode (layout), 'split' for split screen (default), 'vstack' for vertical stack, 'hstack' for horizontal stack", 1},
          {"window-size", {"-w", "--window-size"}, "override window size, specified as [width]x[height] (e.g. 800x600, 1280x or x480)", 1},
@@ -533,55 +343,21 @@ int main(int argc, char** argv) {
          {"auto-loop-mode", {"-a", "--auto-loop-mode"}, "auto-loop playback when buffer fills, 'off' for continuous streaming (default), 'on' for forward-only mode, 'pp' for ping-pong mode", 1},
          {"frame-buffer-size", {"-f", "--frame-buffer-size"}, "frame buffer size (e.g. 10, 70 or 150), default is 50", 1},
          {"time-shift", {"-t", "--time-shift"}, "shift the time stamps of the right video by a user-specified time offset, optionally with a multiplier (e.g. 0.150, -0.1, x1.04+0.1, x25.025/24-1:30.5)", 1},
-         {"wheel-sensitivity", {"-s", "--wheel-sensitivity"}, "mouse wheel sensitivity (e.g. 0.5, -1 or 1.7), default is 1; negative values invert the input direction", 1},
-         {"color-space", {"-C", "--color-space"}, "set the color space matrix, specified as [matrix] for the same on both sides, or [l-matrix?]:[r-matrix?] for different values (e.g. 'bt709' or 'bt2020nc:')", 1},
-         {"color-range", {"-A", "--color-range"}, "set the color range, specified as [range] for the same on both sides, or [l-range?]:[r-range?] for different values (e.g. 'tv', ':pc' or 'pc:tv')", 1},
-         {"color-primaries", {"-P", "--color-primaries"}, "set the color primaries, specified as [primaries] for the same on both sides, or [l-primaries?]:[r-primaries?] for different values (e.g. 'bt709' or 'bt2020:bt709')", 1},
-         {"color-trc", {"-N", "--color-trc"}, "set the transfer characteristics (transfer curve), specified as [trc] for the same on both sides, or [l-trc?]:[r-trc?] for different values (e.g. 'bt709' or 'smpte2084:')", 1},
-         {"tone-map-mode", {"-T", "--tone-map-mode"}, "adapt tones for sRGB display: 'auto' (default) for automatic HDR, 'off' for none, 'on' for full-range mapping, 'rel' for relative comparison (e.g. 'on', 'auto:off', ':rel')", 1},
-         {"left-peak-nits", {"-L", "--left-peak-nits"}, "left video peak luminance in nits (e.g. 850 or 1000), default is 100 for SDR and 500 for HDR", 1},
-         {"right-peak-nits", {"-R", "--right-peak-nits"}, "right video peak luminance in nits; see --left-peak-nits", 1},
-         {"boost-tone", {"-B", "--boost-tone"}, "adjust tone-mapping strength factor, specified as [factor] for the same on both sides, or [l-factor?]:[r-factor?] for different values (e.g. '0.6', ':3' or '2:1.5')", 1},
-         {"filters", {"-i", "--filters"}, "specify a comma-separated list of FFmpeg filters to be applied to both sides (e.g. scale=1920:-2,delogo=x=10:y=10:w=100:h=70)", 1},
-         {"left-filters", {"-l", "--left-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the left video (e.g. format=gray,crop=iw:ih-240)", 1},
-         {"right-filters", {"-r", "--right-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the right video (e.g. yadif,hqdn3d,pad=iw+320:ih:160:0)", 1},
-         {"find-filters", {"--find-filters"}, "find FFmpeg video filters that match the provided search term (e.g. 'scale', 'libvmaf' or 'dnn'; use \"\" to list all)", 1},
-         {"find-protocols", {"--find-protocols"}, "find FFmpeg input protocols that match the provided search term (e.g. 'ipfs', 'srt', or 'rtmp'; use \"\" to list all)", 1},
          {"demuxer", {"--demuxer"}, "left FFmpeg video demuxer name for both sides, specified as [type?][:options?] (e.g. 'rawvideo:pixel_format=rgb24,video_size=320x240,framerate=10')", 1},
          {"left-demuxer", {"--left-demuxer"}, "left FFmpeg video demuxer name, specified as [type?][:options?]", 1},
          {"right-demuxer", {"--right-demuxer"}, "right FFmpeg video demuxer name, specified as [type?][:options?]", 1},
-         {"find-demuxers", {"--find-demuxers"}, "find FFmpeg video demuxers that match the provided search term (e.g. 'matroska', 'mp4', 'vapoursynth' or 'pipe'; use \"\" to list all)", 1},
          {"decoder", {"--decoder"}, "FFmpeg video decoder name for both sides, specified as [type?][:options?] (e.g. ':strict=unofficial', ':strict=-2' or 'vvc:strict=experimental')", 1},
          {"left-decoder", {"--left-decoder"}, "left FFmpeg video decoder name, specified as [type?][:options?] (e.g. ':strict=-2,trust_dec_pts=1' or 'h264:trust_dec_pts=1')", 1},
          {"right-decoder", {"--right-decoder"}, "right FFmpeg video decoder name, specified as [type?][:options?]", 1},
-         {"find-decoders", {"--find-decoders"}, "find FFmpeg video decoders that match the provided search term (e.g. 'h264', 'hevc', 'av1' or 'cuvid'; use \"\" to list all)", 1},
          {"hwaccel", {"--hwaccel"}, "FFmpeg video hardware acceleration for both sides, specified as [type][:device?[:options?]] (e.g. 'videotoolbox' or 'vaapi:/dev/dri/renderD128')", 1},
          {"left-hwaccel", {"--left-hwaccel"}, "left FFmpeg video hardware acceleration, specified as [type][:device?[:options?]] (e.g. 'cuda', 'cuda:1' or 'vulkan')", 1},
-         {"right-hwaccel", {"--right-hwaccel"}, "right FFmpeg video hardware acceleration, specified as [type][:device?[:options?]]", 1},
-         {"find-hwaccels", {"--find-hwaccels"}, "find FFmpeg video hardware acceleration types that match the provided search term (e.g. 'videotoolbox' or 'vulkan'; use \"\" to list all)", 1},
-         {"disable-auto-filters", {"--no-auto-filters"}, "disable the default behaviour of automatically injecting filters for deinterlacing, DAR correction, frame rate harmonization, rotation and colorimetry", 0}}};
+         {"right-hwaccel", {"--right-hwaccel"}, "right FFmpeg video hardware acceleration, specified as [type][:device?[:options?]]", 1}}};
 
     argagg::parser_results args;
     args = argparser.parse(argc, argv_decoded);
 
-    if (args["show-controls"]) {
-      print_controls();
-    } else if (args["find-filters"]) {
-      find_matching_video_filters(args["find-filters"]);
-    } else if (args["find-demuxers"]) {
-      find_matching_video_demuxers(args["find-demuxers"]);
-    } else if (args["find-protocols"]) {
-      find_matching_input_protocols(args["find-protocols"]);
-    } else if (args["find-decoders"]) {
-      find_matching_video_decoders(args["find-decoders"]);
-    } else if (args["find-hwaccels"]) {
-      find_matching_hw_accels(args["find-hwaccels"]);
-    } else if (args["help"] || args.count() == 0) {
-      std::ostringstream usage;
-      usage << "video-compare " << VersionInfo::version << " " << VersionInfo::copyright << std::endl << std::endl;
-      usage << "Usage: " << argv[0] << " [OPTIONS]... FILE1 FILE2 [FILE3] [FILE4] ..." << std::endl << std::endl;
-      argagg::fmt_ostream fmt(std::cerr);
-      fmt << usage.str() << argparser;
+    if (args.count() == 0) {
+      std::cerr << "Usage: video-compare [OPTIONS]... FILE1 FILE2 [FILE3] [FILE4] ..." << std::endl;
     } else {
       VideoCompareConfig config;
 
@@ -593,7 +369,6 @@ int main(int argc, char** argv) {
       // This will be used as a template for all right videos
       InputVideo right_template{RIGHT, "Right"};
 
-      config.verbose = args["verbose"];
       config.fit_window_to_usable_bounds = args["window-fit-display"];
       
       if (args["high-dpi"]) {
@@ -611,8 +386,6 @@ int main(int argc, char** argv) {
       config.use_10_bpc = args["10-bpc"];
       config.fast_input_alignment = args["fast-alignment"];
       config.bilinear_texture_filtering = args["bilinear-texture"];
-      config.disable_auto_filters = args["disable-auto-filters"];
-      config.start_in_subtraction_mode = args["subtraction-mode"];
 
       if (args["display-number"]) {
         const std::string display_number_arg = args["display-number"];
@@ -636,34 +409,6 @@ int main(int argc, char** argv) {
         } else {
           throw std::logic_error{"Cannot parse display mode argument (valid options: split, vstack, hstack)"};
         }
-      }
-      if (args["color-space"]) {
-        auto color_space_spec = static_cast<const std::string&>(args["color-space"]);
-        auto left_color_space = get_nth_token_or_empty(color_space_spec, ':', 0);
-
-        config.left.color_space = left_color_space;
-        right_template.color_space = (color_space_spec == left_color_space) ? color_space_spec : get_nth_token_or_empty(color_space_spec, ':', 1);
-      }
-      if (args["color-range"]) {
-        auto color_range_spec = static_cast<const std::string&>(args["color-range"]);
-        auto left_color_range = get_nth_token_or_empty(color_range_spec, ':', 0);
-
-        config.left.color_range = left_color_range;
-        right_template.color_range = (color_range_spec == left_color_range) ? color_range_spec : get_nth_token_or_empty(color_range_spec, ':', 1);
-      }
-      if (args["color-primaries"]) {
-        auto color_primaries_spec = static_cast<const std::string&>(args["color-primaries"]);
-        auto left_primaries = get_nth_token_or_empty(color_primaries_spec, ':', 0);
-
-        config.left.color_primaries = left_primaries;
-        right_template.color_primaries = (color_primaries_spec == left_primaries) ? color_primaries_spec : get_nth_token_or_empty(color_primaries_spec, ':', 1);
-      }
-      if (args["color-trc"]) {
-        auto color_trc_spec = static_cast<const std::string&>(args["color-trc"]);
-        auto left_trc = get_nth_token_or_empty(color_trc_spec, ':', 0);
-
-        config.left.color_trc = left_trc;
-        right_template.color_trc = (color_trc_spec == left_trc) ? color_trc_spec : get_nth_token_or_empty(color_trc_spec, ':', 1);
       }
       if (args["window-size"]) {
         if (config.fit_window_to_usable_bounds) {
@@ -724,37 +469,6 @@ int main(int argc, char** argv) {
           throw std::logic_error{"Cannot parse time shift argument: " + std::string(e.what())};
         }
       }
-      if (args["wheel-sensitivity"]) {
-        const std::string wheel_sensitivity_arg = args["wheel-sensitivity"];
-        const std::regex wheel_sensitivity_re("^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$");
-
-        if (!std::regex_match(wheel_sensitivity_arg, wheel_sensitivity_re)) {
-          throw std::logic_error{"Cannot parse mouse wheel sensitivity argument; must be a valid number, e.g. 1.3 or -1"};
-        }
-
-        config.wheel_sensitivity = parse_strict_double(wheel_sensitivity_arg);
-      }
-      if (args["tone-map-mode"]) {
-        auto tone_mapping_mode_spec = static_cast<const std::string&>(args["tone-map-mode"]);
-        auto left_tone_mapping_mode = get_nth_token_or_empty(tone_mapping_mode_spec, ':', 0);
-
-        config.left.tone_mapping_mode = parse_tone_mapping_mode(left_tone_mapping_mode);
-        right_template.tone_mapping_mode = (tone_mapping_mode_spec == left_tone_mapping_mode) ? config.left.tone_mapping_mode : parse_tone_mapping_mode(get_nth_token_or_empty(tone_mapping_mode_spec, ':', 1));
-      }
-
-      // video filters
-      if (args["filters"]) {
-        config.left.video_filters = static_cast<const std::string&>(args["filters"]);
-        right_template.video_filters = static_cast<const std::string&>(args["filters"]);
-      }
-      if (args["left-filters"]) {
-        config.left.video_filters = safe_replace_placeholder(static_cast<const std::string&>(args["left-filters"]), config.left.video_filters, "filter specification");
-      }
-      if (args["right-filters"]) {
-        right_template.video_filters = safe_replace_placeholder(static_cast<const std::string&>(args["right-filters"]), right_template.video_filters, "filter specification");
-      }
-      resolve_mutual_placeholders(config.left.video_filters, right_template.video_filters, "filter specification");
-
       // demuxer
       config.left.demuxer_options = create_default_demuxer_options();
       right_template.demuxer_options = create_default_demuxer_options();
@@ -805,33 +519,6 @@ int main(int argc, char** argv) {
 
       config.left.hw_accel_spec = parse_ffmpeg_param_spec(config.left.hw_accel_spec, "", config.left.hw_accel_options, "hardware acceleration", 2, false, true);
       right_template.hw_accel_spec = parse_ffmpeg_param_spec(right_template.hw_accel_spec, "", right_template.hw_accel_options, "hardware acceleration", 2, false, true);
-
-      if (args["left-peak-nits"] || args["right-peak-nits"]) {
-        std::string left_peak_nits;
-        std::string right_peak_nits;
-
-        if (args["left-peak-nits"]) {
-          left_peak_nits = static_cast<const std::string&>(args["left-peak-nits"]);
-        }
-        if (args["right-peak-nits"]) {
-          right_peak_nits = static_cast<const std::string&>(args["right-peak-nits"]);
-        }
-        resolve_mutual_placeholders(left_peak_nits, right_peak_nits, "peak (in nits)");
-
-        if (!left_peak_nits.empty()) {
-          config.left.peak_luminance_nits = parse_peak_nits(left_peak_nits);
-        }
-        if (!right_peak_nits.empty()) {
-          right_template.peak_luminance_nits = parse_peak_nits(right_peak_nits);
-        }
-      }
-      if (args["boost-tone"]) {
-        auto boost_tone_spec = static_cast<const std::string&>(args["boost-tone"]);
-        auto left_boost_tone = get_nth_token_or_empty(boost_tone_spec, ':', 0);
-
-        config.left.boost_tone = parse_boost_tone(left_boost_tone);
-        right_template.boost_tone = (boost_tone_spec == left_boost_tone) ? config.left.boost_tone : parse_boost_tone(get_nth_token_or_empty(boost_tone_spec, ':', 1));
-      }
 
       config.left.file_name = args.pos[0];
 

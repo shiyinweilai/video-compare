@@ -289,7 +289,7 @@ class Display {
   SDL_Event event_;
   int mouse_x_;
   int mouse_y_;
-  float wheel_sensitivity_;
+  float wheel_sensitivity_{1.0f};
 
   std::vector<SDL_Texture*> metadata_textures_;
   int metadata_total_height_{0};
@@ -313,7 +313,7 @@ class Display {
   // Thread pool for parallel processing
   RowWorkers row_workers_;
 
-  void print_verbose_info();
+
 
   void convert_to_packed_10_bpc(std::array<uint8_t*, 3> in_planes, std::array<size_t, 3> in_pitches, std::array<uint32_t*, 3> out_planes, std::array<size_t, 3> out_pitches, const SDL_Rect& roi);
 
@@ -404,7 +404,6 @@ class Display {
  public:
   Display(const int display_number,
           const Mode mode,
-          const bool verbose,
           const bool fit_window_to_usable_bounds,
           const bool high_dpi_allowed,
           const bool use_10_bpc,
@@ -414,8 +413,6 @@ class Display {
           const unsigned width,
           const unsigned height,
           const double duration,
-          const float wheel_sensitivity,
-          const bool start_in_subtraction_mode,
           const std::string& left_file_name,
           const std::string& right_file_name);
   ~Display();

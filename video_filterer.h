@@ -16,15 +16,7 @@ class VideoFilterer : public SideAware {
   VideoFilterer(const Side& side,
                 const Demuxer* demuxer,
                 const VideoDecoder* video_decoder,
-                const ToneMapping tone_mapping_mode,
-                const float boost_tone,
-                const std::string& custom_video_filters,
-                const std::string& custom_color_space,
-                const std::string& custom_color_range,
-                const std::string& custom_color_primaries,
-                const std::string& custom_color_trc,
-                const VideoFilterContext* video_filter_context,
-                const bool disable_auto_filters);
+                const VideoFilterContext* video_filter_context);
   ~VideoFilterer();
 
   void init();
@@ -50,7 +42,6 @@ class VideoFilterer : public SideAware {
 
   const Demuxer* demuxer_;
   const VideoDecoder* video_decoder_;
-  const ToneMapping tone_mapping_mode_;
 
   std::string filter_description_;
 
@@ -63,7 +54,4 @@ class VideoFilterer : public SideAware {
   AVFilterContext* buffersrc_ctx_;
   AVFilterContext* buffersink_ctx_;
   AVFilterGraph* filter_graph_;
-
-  DynamicRange dynamic_range_;
-  unsigned peak_luminance_nits_;
 };

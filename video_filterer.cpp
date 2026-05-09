@@ -1,41 +1,17 @@
 #include "video_filterer.h"
-#include <cmath>
 #include <iostream>
 #include <string>
 #include "ffmpeg.h"
 #include "string_utils.h"
 #include "video_filter_context.h"
 
-static constexpr char VIDEO_FILTER_GROUP_DELIMITER = '|';
-
-static unsigned get_content_light_level_or_zero(const AVFrame* frame) {
-  AVFrameSideData* frame_side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
-
-  if (frame_side_data != nullptr && static_cast<size_t>(frame_side_data->size) >= sizeof(AVContentLightMetadata)) {
-    AVContentLightMetadata* cll_metadata = reinterpret_cast<AVContentLightMetadata*>(frame_side_data->data);
-
-    return cll_metadata->MaxCLL;
-  }
-
-  return UNSET_PEAK_LUMINANCE;
-}
-
 VideoFilterer::VideoFilterer(const Side& side,
                              const Demuxer* demuxer,
                              const VideoDecoder* video_decoder,
-                             const ToneMapping tone_mapping_mode,
-                             const float boost_tone,
-                             const std::string& custom_video_filters,
-                             const std::string& custom_color_space,
-                             const std::string& custom_color_range,
-                             const std::string& custom_color_primaries,
-                             const std::string& custom_color_trc,
-                             const VideoFilterContext* video_filter_context,
-                             const bool disable_auto_filters)
+                             const VideoFilterContext* video_filter_context)
     : SideAware(side),
       demuxer_(demuxer),
       video_decoder_(video_decoder),
-      tone_mapping_mode_(tone_mapping_mode),
       width_(video_decoder->width()),
       height_(video_decoder->height()),
       pixel_format_(video_decoder->pixel_format()),
@@ -45,178 +21,49 @@ VideoFilterer::VideoFilterer(const Side& side,
 
   std::vector<std::string> filters;
 
-  // up to two filter groups are allowed ("pre" and "post"), if only a single group is specified it is assigned to the "post" group
-  const std::vector<std::string> custom_filter_groups = string_split(custom_video_filters, VIDEO_FILTER_GROUP_DELIMITER);
+  // deinterlacing
+  const bool this_is_interlaced = video_decoder->codec_context()->field_order != AV_FIELD_PROGRESSIVE && video_decoder->codec_context()->field_order != AV_FIELD_UNKNOWN;
 
-  std::string custom_pre_filters, custom_post_filters;
-
-  if (custom_filter_groups.size() == 2 || (custom_filter_groups.size() == 1 && custom_video_filters.back() == VIDEO_FILTER_GROUP_DELIMITER)) {
-    custom_pre_filters = custom_filter_groups[0];
-
-    if (custom_filter_groups.size() > 1) {
-      custom_post_filters = custom_filter_groups[1];
-    }
-  } else if (custom_filter_groups.size() == 1) {
-    custom_post_filters = custom_filter_groups[0];
-  } else if (custom_filter_groups.size() > 2) {
-    throw std::runtime_error("No more than 2 filter groups supported");
+  if (this_is_interlaced) {
+    filters.push_back("bwdif");
   }
 
-  // custom pre-filtering can for example be used to override the color space, primaries and trc settings in case of incorrect metadata before any tone-mapping is performed
-  // for example: 'setparams=colorspace=bt709|' (if not post-filtering is desired)
-  if (!custom_pre_filters.empty()) {
-    filters.push_back(custom_pre_filters);
+  double this_frame_rate_dbl = av_q2d(demuxer->guess_frame_rate());
+  double max_other_frame_rate_dbl = video_filter_context->get_max_frame_rate_excluding(side);
+
+  if (this_is_interlaced) {
+    this_frame_rate_dbl *= 2.0;
   }
 
-  if (!disable_auto_filters) {
-    // deinterlacing
-    const bool this_is_interlaced = video_decoder->codec_context()->field_order != AV_FIELD_PROGRESSIVE && video_decoder->codec_context()->field_order != AV_FIELD_UNKNOWN;
+  // stretch to display aspect ratio
+  if (video_decoder->is_anamorphic()) {
+    const AVRational sample_aspect_ratio = video_decoder->sample_aspect_ratio();
 
-    if (this_is_interlaced) {
-      filters.push_back("bwdif");
-    }
-
-    double this_frame_rate_dbl = av_q2d(demuxer->guess_frame_rate());
-    double max_other_frame_rate_dbl = video_filter_context->get_max_frame_rate_excluding(side);
-
-    if (this_is_interlaced) {
-      this_frame_rate_dbl *= 2.0;
-    }
-
-    // stretch to display aspect ratio
-    if (video_decoder->is_anamorphic()) {
-      const AVRational sample_aspect_ratio = video_decoder->sample_aspect_ratio();
-
-      if (sample_aspect_ratio.num > sample_aspect_ratio.den) {
-        filters.push_back("scale=iw*sar:ih");
-      } else {
-        filters.push_back("scale=iw:ih/sar");
-      }
-    }
-
-    // harmonize the frame rate to the most frames per second
-    if (this_frame_rate_dbl < (max_other_frame_rate_dbl * 0.9995)) {
-      filters.push_back(string_sprintf("fps=%.3f", max_other_frame_rate_dbl));
-    }
-
-    // rotation
-    if (demuxer->rotation() == 90) {
-      filters.push_back("transpose=clock");
-    } else if (demuxer->rotation() == 270) {
-      filters.push_back("transpose=cclock");
-    } else if (demuxer->rotation() == 180) {
-      filters.push_back("hflip");
-      filters.push_back("vflip");
-    } else if (demuxer->rotation() != 0) {
-      filters.push_back(string_sprintf("rotate=%d*PI/180", demuxer->rotation()));
-    }
-  }
-
-  dynamic_range_ = video_decoder->infer_dynamic_range(custom_color_trc);
-  const bool is_hdr_trc = dynamic_range_ != DynamicRange::STANDARD;
-  const bool must_tonemap = tone_mapping_mode == ToneMapping::FULLRANGE || tone_mapping_mode == ToneMapping::RELATIVE || (tone_mapping_mode == ToneMapping::AUTO && is_hdr_trc);
-
-  // resolve initial peak luminance
-  peak_luminance_nits_ = video_decoder->safe_peak_luminance_nits(dynamic_range_);
-
-  if (tone_mapping_mode == ToneMapping::AUTO && is_hdr_trc) {
-    const char* msg;
-
-    if (dynamic_range_ == DynamicRange::PQ) {
-      msg = "PQ / SMPTE ST 2084 transfer characteristics (smpte2084)";
-    } else if (dynamic_range_ == DynamicRange::HLG) {
-      msg = "Hybrid log–gamma transfer characteristics (arib-std-b67)";
+    if (sample_aspect_ratio.num > sample_aspect_ratio.den) {
+      filters.push_back("scale=iw*sar:ih");
     } else {
-      msg = "Unknown transfer characteristics";
-    }
-
-    log_info(string_sprintf("%s applied; performing HDR color space conversion at an initial %d nits.", msg, peak_luminance_nits_).c_str());
-  }
-
-  // set color space and range (+ primaries and TRC if tone-mapping is required) to limited range Rec. 709 if metadata is unspecified or pass any user-provided values
-  if (!disable_auto_filters || must_tonemap || !custom_color_space.empty() || !custom_color_range.empty() || !custom_color_primaries.empty() || !custom_color_trc.empty()) {
-    std::vector<std::string> notes, setparams_options;
-
-    if ((video_decoder->color_space() == AVCOL_SPC_UNSPECIFIED) || !custom_color_space.empty()) {
-      if (custom_color_space.empty()) {
-        notes.push_back("'Color space' (colorspace)");
-      }
-      setparams_options.push_back("colorspace=" + (custom_color_space.empty() ? "bt709" : custom_color_space));
-    }
-    if ((video_decoder->color_range() == AVCOL_RANGE_UNSPECIFIED) || !custom_color_range.empty()) {
-      if (custom_color_range.empty()) {
-        notes.push_back("'Color range' (range)");
-      }
-      setparams_options.push_back("range=" + (custom_color_range.empty() ? "tv" : custom_color_range));
-    }
-    if ((must_tonemap && video_decoder->color_primaries() == AVCOL_PRI_UNSPECIFIED) || !custom_color_primaries.empty()) {
-      if (custom_color_primaries.empty()) {
-        notes.push_back("'Color primaries' (color_primaries)");
-      }
-      setparams_options.push_back("color_primaries=" + (custom_color_primaries.empty() ? "bt709" : custom_color_primaries));
-    }
-    if ((must_tonemap && video_decoder->color_trc() == AVCOL_TRC_UNSPECIFIED) || !custom_color_trc.empty()) {
-      if (custom_color_trc.empty()) {
-        notes.push_back("'Transfer characteristics' (color_trc)");
-      }
-      setparams_options.push_back("color_trc=" + (custom_color_trc.empty() ? "bt709" : custom_color_trc));
-    }
-
-    if (!notes.empty()) {
-      log_warning(string_sprintf("Metadata is missing for %s; assuming limited range Rec. 709. It is recommended to manually set the missing properties to their correct values.", string_join(notes, ", ").c_str()));
-    }
-    if (!setparams_options.empty()) {
-      filters.push_back(string_sprintf("setparams=%s", string_join(setparams_options, ":").c_str()));
+      filters.push_back("scale=iw:ih/sar");
     }
   }
 
-  // tone-mapping
-  if (must_tonemap) {
-    const std::string display_primaries = "bt709";
-    const std::string display_trc = "iec61966-2-1";  // sRGB
-
-    std::vector<std::string> warnings;
-
-    if (!avfilter_get_by_name("zscale")) {
-      warnings.push_back("zscale filter missing in libavfilter build");
-    }
-
-    if (warnings.empty()) {
-      const unsigned other_peak_luminance_nits = video_filter_context->get_max_peak_luminance_excluding(side);
-
-      float tone_adjustment = (tone_mapping_mode == ToneMapping::RELATIVE && peak_luminance_nits_ < other_peak_luminance_nits) ? static_cast<float>(peak_luminance_nits_) / other_peak_luminance_nits : 1.0F;
-      tone_adjustment *= boost_tone;
-
-      if (std::fabs(tone_adjustment - 1.0F) > 1e-5) {
-        filters.push_back("format=gbrpf32");
-
-        if (tone_mapping_mode == ToneMapping::AUTO) {
-          // peak luma gets injected from within init_filters() during auto-mode
-          filters.push_back("zscale=t=linear:npl=%d");
-        } else {
-          filters.push_back(string_sprintf("zscale=t=linear:npl=%d", peak_luminance_nits_));
-        }
-
-        filters.push_back(string_sprintf("tonemap=clip:param=%.5f", tone_adjustment));
-        filters.push_back(string_sprintf("zscale=p=%s:t=%s", display_primaries.c_str(), display_trc.c_str()));
-      } else {
-        filters.push_back("format=rgb48");
-
-        if (tone_mapping_mode == ToneMapping::AUTO) {
-          // peak luma gets injected from within init_filters() during auto-mode
-          filters.push_back(string_sprintf("zscale=p=%s:t=%s:npl=%%d", display_primaries.c_str(), display_trc.c_str()));
-        } else {
-          filters.push_back(string_sprintf("zscale=p=%s:t=%s:npl=%d", display_primaries.c_str(), display_trc.c_str(), peak_luminance_nits_));
-        }
-      }
-    } else {
-      log_warning(string_sprintf("Cannot add tone mapping filters: %s", string_join(warnings, ", ").c_str()));
-    }
+  // harmonize the frame rate to the most frames per second
+  if (this_frame_rate_dbl < (max_other_frame_rate_dbl * 0.9995)) {
+    filters.push_back(string_sprintf("fps=%.3f", max_other_frame_rate_dbl));
   }
 
-  if (!custom_post_filters.empty()) {
-    filters.push_back(custom_post_filters);
-  } else if (filters.empty()) {
+  // rotation
+  if (demuxer->rotation() == 90) {
+    filters.push_back("transpose=clock");
+  } else if (demuxer->rotation() == 270) {
+    filters.push_back("transpose=cclock");
+  } else if (demuxer->rotation() == 180) {
+    filters.push_back("hflip");
+    filters.push_back("vflip");
+  } else if (demuxer->rotation() != 0) {
+    filters.push_back(string_sprintf("rotate=%d*PI/180", demuxer->rotation()));
+  }
+
+  if (filters.empty()) {
     filters.push_back("copy");
   }
 
@@ -288,7 +135,7 @@ int VideoFilterer::init_filters(const AVCodecContext* dec_ctx, const AVRational 
     inputs->pad_idx = 0;
     inputs->next = nullptr;
 
-    const std::string& filters = (tone_mapping_mode_ == ToneMapping::AUTO && dynamic_range_ != DynamicRange::STANDARD) ? string_sprintf(filter_description_, peak_luminance_nits_) : filter_description_;
+    const std::string& filters = filter_description_;
 
     if ((ret = avfilter_graph_parse_ptr(filter_graph_, filters.c_str(), &inputs, &outputs, nullptr)) >= 0) {
       ret = avfilter_graph_config(filter_graph_, nullptr);
@@ -328,24 +175,6 @@ bool VideoFilterer::send(AVFrame* decoded_frame) {
     if (color_range_ != decoded_frame->color_range) {
       color_range_ = static_cast<AVColorRange>(decoded_frame->color_range);
       must_reinit = true;
-    }
-
-    if (dynamic_range_ != DynamicRange::STANDARD) {
-      unsigned max_cll = get_content_light_level_or_zero(decoded_frame);
-
-      if (max_cll != UNSET_PEAK_LUMINANCE) {
-        if (tone_mapping_mode_ == ToneMapping::FULLRANGE || tone_mapping_mode_ == ToneMapping::RELATIVE) {
-          if (peak_luminance_nits_ != max_cll) {
-            log_warning(string_sprintf("MaxCLL metadata (%d) differs from the expected HDR peak luminance (%d).", max_cll, peak_luminance_nits_));
-          }
-        } else if (tone_mapping_mode_ == ToneMapping::AUTO && (peak_luminance_nits_ != max_cll)) {
-          log_info(string_sprintf("HDR color space conversion adjusted to %d nits based on MaxCLL metadata.", max_cll).c_str());
-
-          must_reinit = true;
-        }
-
-        peak_luminance_nits_ = max_cll;
-      }
     }
 
     if (must_reinit) {

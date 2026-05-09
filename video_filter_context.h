@@ -12,18 +12,13 @@ class VideoFilterContext {
   struct VideoInfo {
     const Demuxer* demuxer;
     const VideoDecoder* decoder;
-    std::string custom_color_trc;
   };
 
-  void add(const Side& side, const Demuxer* demuxer, const VideoDecoder* decoder, const std::string& custom_color_trc);
+  void add(const Side& side, const Demuxer* demuxer, const VideoDecoder* decoder);
 
   // Get the maximum frame rate among all videos except the given side
   // (used for frame rate harmonization)
   double get_max_frame_rate_excluding(const Side& side) const;
-
-  // Get the maximum peak luminance (in nits) among all videos except the given side
-  // (used for relative tone mapping)
-  unsigned get_max_peak_luminance_excluding(const Side& side) const;
 
  private:
   static bool is_interlaced(const VideoDecoder* decoder);
