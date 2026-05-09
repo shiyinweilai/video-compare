@@ -190,7 +190,6 @@ class Display {
   int shift_left_frames_{0};
   int shift_right_frames_{0};
   bool seek_from_start_{false};
-  bool save_image_frames_{false};
   bool print_mouse_position_and_color_{false};
   bool print_image_similarity_metrics_{false};
   bool mouse_is_inside_window_{false};
@@ -203,14 +202,6 @@ class Display {
   // Subtraction mode settings
   DiffMode diff_mode_{DiffMode::AbsLinear};
   bool diff_luma_only_{false};
-
-  // Rectangle selection state
-  enum class SelectionState { NONE, STARTED, COMPLETED };
-  SelectionState selection_state_{SelectionState::NONE};
-  Vector2D selection_start_{0.0F, 0.0F};
-  Vector2D selection_end_{0.0F, 0.0F};
-  bool selection_wrap_{false};
-  bool save_selected_area_{false};
 
   bool input_received_{true};
   int64_t previous_left_frame_pts_;
@@ -244,7 +235,6 @@ class Display {
   TTF_Font* big_font_;
   SDL_Cursor* normal_mode_cursor_;
   SDL_Cursor* pan_mode_cursor_;
-  SDL_Cursor* selection_mode_cursor_;
   uint8_t* diff_buffer_;
   uint32_t* left_buffer_{nullptr};
   uint32_t* right_buffer_{nullptr};
@@ -301,9 +291,6 @@ class Display {
   int mouse_y_;
   float wheel_sensitivity_;
 
-  int saved_image_number_{1};
-  int saved_selected_image_number_{1};
-
   std::vector<SDL_Texture*> metadata_textures_;
   int metadata_total_height_{0};
   int metadata_y_offset_{0};
@@ -344,8 +331,6 @@ class Display {
                                  const size_t pitch_difference,
                                  const int width_right,
                                  const float diff_max) const;
-
-  void save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame);
 
   inline int static round(const float value) { return static_cast<int>(std::round(value)); }
 
@@ -397,11 +382,6 @@ class Display {
   void update_window_title_with_current_roi();
   void ensure_metadata_textures_current();
   void refresh_display_side_mapping();
-
-  SDL_Rect get_left_selection_rect() const;
-  void draw_selection_rect();
-  void possibly_save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame);
-  void save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame, const SDL_Rect& selection_rect);
 
   float compute_zoom_factor(const float zoom_level) const;
   Vector2D compute_relative_move_offset(const Vector2D& zoom_point, const float zoom_factor) const;

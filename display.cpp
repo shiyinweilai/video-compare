@@ -15,7 +15,6 @@
 #include "controls.h"
 #include "ffmpeg.h"
 #include "format_converter.h"
-#include "png_saver.h"
 #include "source_code_pro_regular_ttf.h"
 #include "version.h"
 #include "video_compare_icon.h"
@@ -412,7 +411,6 @@ Display::Display(const int display_number,
 
   normal_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
   pan_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
-  selection_mode_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
 
   // 将 renderer 逻辑坐标系设为物理像素大小（HiDPI 1:1 锐利渲染）
   // 代码里所有绘制坐标均使用 drawable_width_/height_（物理像素），
@@ -551,7 +549,6 @@ Display::~Display() {
 
   SDL_FreeCursor(normal_mode_cursor_);
   SDL_FreeCursor(pan_mode_cursor_);
-  SDL_FreeCursor(selection_mode_cursor_);
 
   delete[] diff_buffer_;
 
@@ -939,83 +936,6 @@ void Display::update_difference(std::array<uint8_t*, 3> planes_left, std::array<
   }
 }
 
-void write_png(const AVFrame* frame, const std::string& filename, std::atomic_bool& error_occurred) {
-  try {
-    PngSaver::save(frame, filename);
-  } catch (const PngSaver::IOException& e) {
-    std::cerr << "Error saving video PNG image to file: " << filename << std::endl;
-    error_occurred = true;
-  } catch (const std::runtime_error& e) {
-    std::cerr << "Unexpected while error saving PNG: " << e.what() << std::endl;
-    error_occurred = true;
-  }
-};
-
-void Display::save_image_frames(const AVFrame* left_frame, const AVFrame* right_frame) {
-  std::atomic_bool error_occurred(false);
-
-  const auto create_onscreen_display_avframe = [&]() -> AVFramePtr {
-    const size_t pitch = use_10_bpc_ ? drawable_width_ * 3 * sizeof(uint16_t) : drawable_width_ * 3;
-    uint8_t* pixels = reinterpret_cast<uint8_t*>(av_malloc(pitch * drawable_height_));
-
-    if (use_10_bpc_) {
-      const size_t temp_pitch = drawable_width_ * sizeof(uint32_t);
-      std::vector<uint8_t> temp_pixels(temp_pitch * drawable_height_);
-
-      SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_ARGB2101010, temp_pixels.data(), temp_pitch);
-
-      const uint32_t* src = reinterpret_cast<const uint32_t*>(temp_pixels.data());
-      uint16_t* dest = reinterpret_cast<uint16_t*>(pixels);
-
-      for (int i = 0; i < drawable_width_ * drawable_height_; i++) {
-        const uint32_t argb = *(src++);
-        const uint32_t r10 = (argb >> 20) & 0x3FF;
-        const uint32_t g10 = (argb >> 10) & 0x3FF;
-        const uint32_t b10 = argb & 0x3FF;
-
-        *(dest++) = static_cast<uint16_t>(r10 << 6);
-        *(dest++) = static_cast<uint16_t>(g10 << 6);
-        *(dest++) = static_cast<uint16_t>(b10 << 6);
-      }
-    } else {
-      SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_RGB24, pixels, pitch);
-    }
-
-    AVFrame* renderer_frame = av_frame_alloc();
-    renderer_frame->format = use_10_bpc_ ? AV_PIX_FMT_RGB48LE : AV_PIX_FMT_RGB24;
-    renderer_frame->width = drawable_width_;
-    renderer_frame->height = drawable_height_;
-    renderer_frame->data[0] = pixels;
-    renderer_frame->linesize[0] = pitch;
-
-    return AVFramePtr(renderer_frame, frame_deleter);
-  };
-
-  const auto osd_frame = create_onscreen_display_avframe();
-
-  const std::string& left_stem = side_ui_[displayed_left_side_.as_simple_index()].file_stem;
-  const std::string& right_stem = side_ui_[displayed_right_side_.as_simple_index()].file_stem;
-  const bool stems_equal = (left_stem == right_stem);
-  const std::string left_filename = string_sprintf("%s%s_%04d.png", left_stem.c_str(), stems_equal ? "_left" : "", saved_image_number_);
-  const std::string right_filename = string_sprintf("%s%s_%04d.png", right_stem.c_str(), stems_equal ? "_right" : "", saved_image_number_);
-  const std::string osd_filename = string_sprintf("%s_%s_osd_%04d.png", left_stem.c_str(), right_stem.c_str(), saved_image_number_);
-
-  auto save_frame = [&](const AVFrame* frame, const std::string& filename) { return write_png(frame, filename, error_occurred); };
-
-  std::thread save_left_frame_thread(save_frame, left_frame, left_filename);
-  std::thread save_right_frame_thread(save_frame, right_frame, right_filename);
-  std::thread save_osd_frame_thread(save_frame, osd_frame.get(), osd_filename);
-
-  save_left_frame_thread.join();
-  save_right_frame_thread.join();
-  save_osd_frame_thread.join();
-
-  if (!error_occurred) {
-    std::cout << "Saved " << string_sprintf("%s, %s and %s", left_filename.c_str(), right_filename.c_str(), osd_filename.c_str()) << std::endl;
-
-    saved_image_number_++;
-  }
-}
 
 void Display::render_text(const int x, const int y, SDL_Texture* texture, const int texture_width, const int texture_height, const int border_extension, const bool left_adjust) {
   // compute clip amount which ensures the filename does not extend more than half the display width
@@ -1741,147 +1661,6 @@ void Display::ensure_metadata_textures_current() {
   }
 }
 
-SDL_Rect Display::get_left_selection_rect() const {
-  const int x = std::min(selection_start_.x(), selection_end_.x());
-  const int y = std::min(selection_start_.y(), selection_end_.y());
-  const int w = std::abs(selection_end_.x() - selection_start_.x());
-  const int h = std::abs(selection_end_.y() - selection_start_.y());
-
-  const int clipped_x = std::max(0, x);
-  const int clipped_y = std::max(0, y);
-  const int clipped_w = std::min(w - (clipped_x - x), video_width_ - clipped_x);
-  const int clipped_h = std::min(h - (clipped_y - y), video_height_ - clipped_y);
-
-  return {clipped_x, clipped_y, clipped_w, clipped_h};
-}
-
-void Display::draw_selection_rect() {
-  if (selection_state_ != SelectionState::STARTED) {
-    return;
-  }
-
-  const auto zoom_rect = compute_zoom_rect();
-
-  auto draw_rect = [this](const SDL_FRect& r, Uint8 r_val, Uint8 g_val, Uint8 b_val) {
-    // Draw semi-transparent overlay
-    SDL_SetRenderDrawColor(renderer_, r_val / 2, g_val / 2, b_val / 2, 128);
-    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    SDL_RenderFillRectF(renderer_, &r);
-
-    // Draw border
-    SDL_SetRenderDrawColor(renderer_, r_val, g_val, b_val, 255);
-    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
-    SDL_RenderDrawRectF(renderer_, &r);
-  };
-
-  SDL_Rect selection_rect = get_left_selection_rect();
-  SDL_FRect drawable_rect = video_rect_to_drawable_transform(video_to_zoom_space(selection_rect, zoom_rect));
-
-  if (mode_ == Mode::SPLIT) {
-    // For split mode, we don't need to draw a second rectangle
-    draw_rect(drawable_rect, 255, 255, 255);
-    return;
-  } else {
-    draw_rect(drawable_rect, 255, 128, 128);
-  }
-
-  // Draw right rectangle with appropriate offset
-  switch (mode_) {
-    case Mode::HSTACK:
-      selection_rect.x += video_width_;
-      break;
-    case Mode::VSTACK:
-      selection_rect.y += video_height_;
-      break;
-    default:
-      break;
-  }
-
-  drawable_rect = video_rect_to_drawable_transform(video_to_zoom_space(selection_rect, zoom_rect));
-  draw_rect(drawable_rect, 128, 128, 255);
-}
-
-void Display::possibly_save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame) {
-  if (selection_state_ != SelectionState::COMPLETED) {
-    return;
-  }
-
-  const SDL_Rect selection_rect = get_left_selection_rect();
-
-  if (selection_rect.w <= 0 || selection_rect.h <= 0) {
-    std::cerr << "Selection rectangle is empty. Please make a valid selection." << std::endl;
-  } else {
-    save_selected_area(left_frame, right_frame, selection_rect);
-  }
-
-  selection_state_ = SelectionState::NONE;
-  save_selected_area_ = false;
-}
-
-void Display::save_selected_area(const AVFrame* left_frame, const AVFrame* right_frame, const SDL_Rect& selection_rect) {
-  std::atomic_bool error_occurred(false);
-
-  // Lambda for creating and initializing frames
-  auto create_frame = [&](const int width, const int height, const AVFrame* source_frame) -> AVFrame* {
-    AVFrame* frame = av_frame_alloc();
-    frame->format = source_frame->format;
-    frame->width = width;
-    frame->height = height;
-    frame->colorspace = source_frame->colorspace;
-    frame->color_range = source_frame->color_range;
-    av_frame_get_buffer(frame, 0);
-    return frame;
-  };
-
-  AVFrame* left_selected = create_frame(selection_rect.w, selection_rect.h, left_frame);
-  AVFrame* right_selected = create_frame(selection_rect.w, selection_rect.h, right_frame);
-  AVFrame* concatenated = create_frame(selection_rect.w * 2, selection_rect.h, left_frame);
-
-  const int pixel_size = use_10_bpc_ ? 3 * sizeof(uint16_t) : 3;
-
-  for (int y = 0; y < selection_rect.h; y++) {
-    const int src_y = selection_rect.y + y;
-    const int dst_y = y;
-
-    // Copy left frame data
-    memcpy(left_selected->data[0] + dst_y * left_selected->linesize[0], left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-
-    // Copy right frame data
-    memcpy(right_selected->data[0] + dst_y * right_selected->linesize[0], right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-
-    // Copy to concatenated frame
-    memcpy(concatenated->data[0] + dst_y * concatenated->linesize[0], left_frame->data[0] + src_y * left_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-    memcpy(concatenated->data[0] + dst_y * concatenated->linesize[0] + selection_rect.w * pixel_size, right_frame->data[0] + src_y * right_frame->linesize[0] + selection_rect.x * pixel_size, selection_rect.w * pixel_size);
-  }
-
-  const std::string& left_stem = side_ui_[displayed_left_side_.as_simple_index()].file_stem;
-  const std::string& right_stem = side_ui_[displayed_right_side_.as_simple_index()].file_stem;
-  const bool stems_equal = (left_stem == right_stem);
-  const std::string left_filename = string_sprintf("%s%s_cutout_%04d.png", left_stem.c_str(), stems_equal ? "_left" : "", saved_selected_image_number_);
-  const std::string right_filename = string_sprintf("%s%s_cutout_%04d.png", right_stem.c_str(), stems_equal ? "_right" : "", saved_selected_image_number_);
-  const std::string concatenated_filename = string_sprintf("%s_%s_cutout_concat_%04d.png", left_stem.c_str(), right_stem.c_str(), saved_selected_image_number_);
-
-  auto save_frame = [&](const AVFrame* frame, const std::string& filename) { return write_png(frame, filename, error_occurred); };
-
-  std::thread save_left_thread(save_frame, left_selected, left_filename);
-  std::thread save_right_thread(save_frame, right_selected, right_filename);
-  std::thread save_concatenated_thread(save_frame, concatenated, concatenated_filename);
-
-  save_left_thread.join();
-  save_right_thread.join();
-  save_concatenated_thread.join();
-
-  av_frame_free(&left_selected);
-  av_frame_free(&right_selected);
-  av_frame_free(&concatenated);
-
-  if (!error_occurred) {
-    std::cout << "Saved " << string_sprintf("%s, %s and %s", left_filename.c_str(), right_filename.c_str(), concatenated_filename.c_str()) << std::endl;
-
-    saved_selected_image_number_++;
-  }
-}
-
 bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_frame, const std::string& current_total_browsable) {
   const bool has_updated_left_pts = previous_left_frame_pts_ != left_frame->pts;
   const bool has_updated_right_pts = previous_right_frame_pts_ != right_frame->pts;
@@ -2455,23 +2234,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     }
   }
 
-  draw_selection_rect();
-
   if (show_metadata_) {
     render_metadata_overlay();
   }
 
   if (show_help_) {
     render_help();
-  }
-
-  if (save_image_frames_) {
-    save_image_frames(left_frame, right_frame);
-    save_image_frames_ = false;
-  }
-
-  if (save_selected_area_) {
-    possibly_save_selected_area(left_frame, right_frame);
   }
 
   SDL_RenderPresent(renderer_);
@@ -2704,8 +2472,6 @@ void Display::handle_event(const SDL_Event& event) {
       cursor = pan_mode_cursor_;
     } else if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK) {
       cursor = pan_mode_cursor_;
-    } else if (save_selected_area_ && selection_state_ != SelectionState::COMPLETED) {
-      cursor = selection_mode_cursor_;
     } else {
       cursor = normal_mode_cursor_;
     }
@@ -2810,14 +2576,6 @@ void Display::handle_event(const SDL_Event& event) {
         break;
       }
 
-      if (selection_state_ == SelectionState::STARTED) {
-        selection_end_ = window_to_video_position(mouse_x_, mouse_y_, compute_zoom_rect());
-
-        if (selection_wrap_) {
-          selection_end_ = wrap_to_left_frame(selection_end_);
-        }
-      }
-
       if (event_.motion.state & SDL_BUTTON_RMASK) {
         const auto pan_offset = Vector2D(event_.motion.xrel, event_.motion.yrel) * Vector2D(video_to_window_width_factor_, video_to_window_height_factor_) / Vector2D(drawable_to_window_width_factor_, drawable_to_window_height_factor_);
 
@@ -2876,19 +2634,6 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         }
       }
-      if (event_.button.button == SDL_BUTTON_LEFT && save_selected_area_ && selection_state_ == SelectionState::NONE) {
-        selection_state_ = SelectionState::STARTED;
-        selection_start_ = window_to_video_position(mouse_x_, mouse_y_, compute_zoom_rect());
-
-        // Check if the selection is outside the left video frame
-        selection_wrap_ = (mode_ == Mode::HSTACK && selection_start_.x() >= video_width_) || (mode_ == Mode::VSTACK && selection_start_.y() >= video_height_);
-
-        if (selection_wrap_) {
-          selection_start_ = wrap_to_left_frame(selection_start_);
-        }
-
-        selection_end_ = selection_start_;
-      }
       update_cursor();
       break;
     case SDL_MOUSEBUTTONUP:
@@ -2897,9 +2642,6 @@ void Display::handle_event(const SDL_Event& event) {
         if (is_seeking_drag_) {
           is_seeking_drag_ = false;
           break;
-        }
-        if (selection_state_ == SelectionState::STARTED) {
-          selection_state_ = SelectionState::COMPLETED;
         }
       }
       update_cursor();
@@ -3044,19 +2786,7 @@ void Display::handle_event(const SDL_Event& event) {
           refresh_display_side_mapping();
           break;
         }
-        case SDLK_f:
-          if (keymod & KMOD_SHIFT) {
-            if (!save_selected_area_) {
-              save_selected_area_ = true;
-            } else {
-              save_selected_area_ = false;
-              selection_state_ = SelectionState::NONE;
-            }
-            update_cursor();
-          } else {
-            save_image_frames_ = true;
-          }
-          break;
+
         case SDLK_p:
           print_mouse_position_and_color_ = mouse_is_inside_window_;
           break;
