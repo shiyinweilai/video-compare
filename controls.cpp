@@ -19,7 +19,6 @@ static const std::vector<std::pair<std::string, std::string>> controls{{"H", "To
                                                                        {"S", "Swap left and right video"},
                                                                        {"A", "Move to the previous frame in the buffer (Shift+A: step back one frame)"},
                                                                        {"D", "Move to the next frame in the buffer (Shift+D: step forward one frame)"},
-                                                                       {"F", "Save both frames and the on-screen content as PNG images"},
                                                                        {"P", "Print mouse position and pixel value under cursor to console"},
                                                                        {"M", "Print image similarity metrics to console"},
                                                                        {"Z", "Magnify area around cursor (result shown in lower left corner)"},
@@ -35,9 +34,6 @@ static const std::vector<std::pair<std::string, std::string>> controls{{"H", "To
                                                                        {"8", "Zoom 400% (x4)"},
                                                                        {"9", "Zoom 800% (x8)"},
                                                                        {"0", "Toggle video/subtraction mode"},
-                                                                       {"F1", "Toggle Histogram window"},
-                                                                       {"F2", "Toggle Vectorscope window"},
-                                                                       {"F3", "Toggle Waveform window"},
                                                                        {"Tab", "Cycle through right videos"},
                                                                        {"+", "Time-shift right video 1 frame forward"},
                                                                        {"-", "Time-shift right video 1 frame backward"},
@@ -52,7 +48,6 @@ static const std::vector<std::string> instructions{
     "Hold SHIFT while pressing A or D to decode and step one frame backward/forward.",
     "Hold CTRL while time-shifting with +/- for faster increments/decrements of 10 frames per keystroke. Similarly, hold ALT for even larger time-shifts of 100 frames.",
     "Use CTRL+C (Windows/Linux) or CMD+C (macOS) to copy the current timestamp of the left video to the clipboard, and CTRL+V (Windows/Linux) or CMD+V (macOS) to paste a timestamp from the clipboard and seek to that position.",
-    "Use SHIFT+F to select a region; cutouts from both frames and their concatenation will be saved as PNGs.",
     "Use CTRL+SHIFT+1..0 to switch directly to right video 1-10."};
 
 const std::vector<std::pair<std::string, std::string>> get_controls() {
