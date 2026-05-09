@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # GCC/Clang编译器选项
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Ofast -D__STDC_CONSTANT_MACROS")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -D__STDC_CONSTANT_MACROS")
 # GCC/Clang警告选项
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-deprecated -Wno-deprecated-declarations")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wdisabled-optimization -Wctor-dtor-privacy -Woverloaded-virtual")
