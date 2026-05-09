@@ -282,7 +282,9 @@ Display::Display(const int display_number,
 
     if (fit_window_to_usable_bounds) {
       const int usable_width = std::max(bounds.w - border_width, min_width);
-      const int usable_height = std::max(bounds.h - border_height, min_height);
+      // 预留底部 toolbar 高度（约 52 逻辑像素），避免窗口超出屏幕
+      constexpr int toolbar_reserve = 52;
+      const int usable_height = std::max(bounds.h - border_height - toolbar_reserve, min_height);
 
       const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
 
@@ -296,9 +298,11 @@ Display::Display(const int display_number,
           window_height = static_cast<int>(window_width / aspect_ratio);
         }
       }
+      // 窗口实际高度 = 视频区域 + toolbar
+      window_height += toolbar_reserve;
 
       window_x = bounds.x + (usable_width - window_width + border_width) / 2;
-      window_y = bounds.y + (usable_height - window_height + border_height) / 2 + border_width;
+      window_y = bounds.y + (usable_height - (window_height - toolbar_reserve) + border_height) / 2 + border_width;
 #ifdef __linux__
       window_y -= 2 * border_width + 4;
 #endif
@@ -457,7 +461,14 @@ Display::Display(const int display_number,
 }
 
 void Display::update_viewport() {
-  float window_aspect = static_cast<float>(drawable_width_) / drawable_height_;
+  // toolbar 高度：约 52 逻辑像素（乘以 DPI 缩放因子）
+  toolbar_drawable_height_ = static_cast<int>(52 * font_scale_);
+
+  // 视频可用区域（去掉底部 toolbar）
+  const int video_area_w = drawable_width_;
+  const int video_area_h = drawable_height_ - toolbar_drawable_height_;
+
+  float window_aspect = static_cast<float>(video_area_w) / video_area_h;
   float video_aspect = static_cast<float>(video_width_) / video_height_;
 
   if (mode_ == Mode::HSTACK) {
@@ -469,18 +480,18 @@ void Display::update_viewport() {
   int w, h;
   if (window_aspect > video_aspect) {
     // Window is wider than video (pillarbox)
-    h = drawable_height_;
+    h = video_area_h;
     w = static_cast<int>(h * video_aspect);
   } else {
     // Window is taller than video (letterbox)
-    w = drawable_width_;
+    w = video_area_w;
     h = static_cast<int>(w / video_aspect);
   }
 
   viewport_rect_.w = w;
   viewport_rect_.h = h;
-  viewport_rect_.x = (drawable_width_ - w) / 2;
-  viewport_rect_.y = (drawable_height_ - h) / 2;
+  viewport_rect_.x = (video_area_w - w) / 2;
+  viewport_rect_.y = (video_area_h - h) / 2;
 }
 
 Display::~Display() {
@@ -1032,7 +1043,9 @@ void Display::render_progress_dots(const float position, const float progress, c
     const int dot_width = std::round(dot_size);
     const int dot_height = std::round(dot_size);
 
-    const int y_offset = is_top ? 1 : drawable_height_ - 1 - dot_height;
+    // 进度条渲染在 toolbar 顶部边缘：左视频在上半，右视频在下半
+    const int toolbar_top = drawable_height_ - toolbar_drawable_height_;
+    const int y_offset = is_top ? toolbar_top + 1 : toolbar_top + dot_height + 2;
 
     const int x_position = std::round(position * drawable_width_ / duration_);
     const int x_progress = std::round(progress * drawable_width_ / duration_);
@@ -1050,7 +1063,7 @@ void Display::render_progress_dots(const float position, const float progress, c
     // draw current frame
     SDL_SetRenderDrawColor(renderer_, POSITION_COLOR.r, POSITION_COLOR.g, POSITION_COLOR.b, BACKGROUND_ALPHA * 2);
 
-    const SDL_Rect current_frame = {x_position, is_top ? y_offset : y_offset - dot_height, x_progress - x_position, dot_height * 2};
+    const SDL_Rect current_frame = {x_position, y_offset, x_progress - x_position, dot_height};
     SDL_RenderDrawRect(renderer_, &current_frame);
   }
 }
@@ -1995,6 +2008,18 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   SDL_SetRenderDrawColor(renderer_, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
   SDL_RenderClear(renderer_);
 
+  // 渲染底部 toolbar 背景（深色条，与视频区域分离）
+  if (show_hud_ && toolbar_drawable_height_ > 0) {
+    static const SDL_Color TOOLBAR_BG = {28, 32, 36, 255};
+    SDL_SetRenderDrawColor(renderer_, TOOLBAR_BG.r, TOOLBAR_BG.g, TOOLBAR_BG.b, TOOLBAR_BG.a);
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+    SDL_Rect toolbar_rect = {0, drawable_height_ - toolbar_drawable_height_, drawable_width_, toolbar_drawable_height_};
+    SDL_RenderFillRect(renderer_, &toolbar_rect);
+    // 顶部分隔线
+    SDL_SetRenderDrawColor(renderer_, 60, 65, 72, 255);
+    SDL_RenderDrawLine(renderer_, 0, drawable_height_ - toolbar_drawable_height_, drawable_width_, drawable_height_ - toolbar_drawable_height_);
+  }
+
   // mouse video x-position stretched to full window extent
   float drawable_mouse_x = static_cast<float>(mouse_x_) * drawable_to_window_width_factor_;
   float total_video_w = static_cast<float>(video_width_);
@@ -2154,13 +2179,11 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         SDL_FreeSurface(ln_s);
 
         const int side_btn_spacing = static_cast<int>(10 * font_scale_);
-        const int line3_y = line2_y_ + left_position_text_height + static_cast<int>(6 * font_scale_);
-        int lbx = line1_y_;
+        // 左侧 << >> 按钮放在 toolbar 内垂直居中
+        const int line3_y = drawable_height_ - toolbar_drawable_height_ / 2 - lp_h / 2;
+        int lbx = static_cast<int>(16 * font_scale_);
 
-        // 绘制左侧 << 按钮
-        SDL_Rect lp_bg = {lbx - border_extension_, line3_y - border_extension_, lp_w + double_border_extension_, lp_h + double_border_extension_};
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-        SDL_RenderFillRect(renderer_, &lp_bg);
+        // 绘制左侧 << 按钮（toolbar 内，无半透明背景）
         SDL_Rect lp_dst = {lbx, line3_y, lp_w, lp_h};
         SDL_RenderCopy(renderer_, lp_tex, nullptr, &lp_dst);
         btn_left_prev_frame_ = {static_cast<int>((lbx - border_extension_) / drawable_to_window_width_factor_),
@@ -2170,10 +2193,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
         lbx += lp_w + side_btn_spacing;
 
-        // 绘制左侧 >> 按钮
-        SDL_Rect ln_bg = {lbx - border_extension_, line3_y - border_extension_, ln_w + double_border_extension_, ln_h + double_border_extension_};
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-        SDL_RenderFillRect(renderer_, &ln_bg);
+        // 绘制左侧 >> 按钮（toolbar 内，无半透明背景）
         SDL_Rect ln_dst = {lbx, line3_y, ln_w, ln_h};
         SDL_RenderCopy(renderer_, ln_tex, nullptr, &ln_dst);
         btn_left_next_frame_ = {static_cast<int>((lbx - border_extension_) / drawable_to_window_width_factor_),
@@ -2240,20 +2260,11 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         const int side_btn_spacing = static_cast<int>(10 * font_scale_);
         const int right_btn_total_w = rp_w + rn_w + side_btn_spacing;
 
-        int r_line3_y;
-        int rbx;
-        if (mode_ == Mode::VSTACK) {
-          r_line3_y = drawable_height_ - line2_y_ - side_ui_[displayed_right_side_.as_simple_index()].text_height - static_cast<int>(6 * font_scale_) - rp_h;
-          rbx = line1_y_;
-        } else {
-          r_line3_y = line2_y_ + right_position_text_height + static_cast<int>(6 * font_scale_);
-          rbx = drawable_width_ - line1_y_ - right_btn_total_w;
-        }
+        // 右侧 << >> 按钮放在 toolbar 内垂直居中，靠右对齐
+        const int r_line3_y = drawable_height_ - toolbar_drawable_height_ / 2 - rp_h / 2;
+        int rbx = drawable_width_ - static_cast<int>(16 * font_scale_) - right_btn_total_w;
 
-        // 绘制右侧 << 按钮
-        SDL_Rect rp_bg = {rbx - border_extension_, r_line3_y - border_extension_, rp_w + double_border_extension_, rp_h + double_border_extension_};
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-        SDL_RenderFillRect(renderer_, &rp_bg);
+        // 绘制右侧 << 按钮（toolbar 内，无半透明背景）
         SDL_Rect rp_dst = {rbx, r_line3_y, rp_w, rp_h};
         SDL_RenderCopy(renderer_, rp_tex, nullptr, &rp_dst);
         btn_right_prev_frame_ = {static_cast<int>((rbx - border_extension_) / drawable_to_window_width_factor_),
@@ -2263,10 +2274,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
         rbx += rp_w + side_btn_spacing;
 
-        // 绘制右侧 >> 按钮
-        SDL_Rect rn_bg = {rbx - border_extension_, r_line3_y - border_extension_, rn_w + double_border_extension_, rn_h + double_border_extension_};
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-        SDL_RenderFillRect(renderer_, &rn_bg);
+        // 绘制右侧 >> 按钮（toolbar 内，无半透明背景）
         SDL_Rect rn_dst = {rbx, r_line3_y, rn_w, rn_h};
         SDL_RenderCopy(renderer_, rn_tex, nullptr, &rn_dst);
         btn_right_next_frame_ = {static_cast<int>((rbx - border_extension_) / drawable_to_window_width_factor_),
@@ -2290,8 +2298,11 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       SDL_FreeSurface(text_surface);
 
       SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 2);
-      render_text(drawable_width_ - line1_y_ - target_position_text_width, drawable_height_ - line1_y_ - target_position_text_height, target_position_text_texture, target_position_text_width, target_position_text_height, border_extension_,
-                  false);
+      // target_position 显示在 toolbar 内右侧（左侧 << >> 按钮左边）
+      const int tp_x = drawable_width_ / 2 + static_cast<int>(60 * font_scale_);
+      const int tp_y = drawable_height_ - toolbar_drawable_height_ / 2 - target_position_text_height / 2;
+      SDL_Rect tp_dst = {tp_x, tp_y, target_position_text_width, target_position_text_height};
+      SDL_RenderCopy(renderer_, target_position_text_texture, nullptr, &tp_dst);
 
       SDL_DestroyTexture(target_position_text_texture);
     }
@@ -2321,10 +2332,13 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
     SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 2);
 
-    int text_x = (mode_ == Mode::VSTACK) ? drawable_width_ - line1_y_ - zoom_position_text_width : line1_y_;
-    int text_y = (mode_ == Mode::VSTACK) ? line1_y_ : drawable_height_ - line1_y_ - zoom_position_text_height;
-
-    render_text(text_x, text_y, zoom_position_text_texture, zoom_position_text_width, zoom_position_text_height, border_extension_, false);
+    // zoom factor 显示在 toolbar 内左侧（左侧 << >> 按钮右边）
+    {
+      const int zx = static_cast<int>(16 * font_scale_);
+      const int zy = drawable_height_ - toolbar_drawable_height_ / 2 - zoom_position_text_height / 2 - static_cast<int>(10 * font_scale_);
+      SDL_Rect z_dst = {zx, zy, zoom_position_text_width, zoom_position_text_height};
+      SDL_RenderCopy(renderer_, zoom_position_text_texture, nullptr, &z_dst);
+    }
     SDL_DestroyTexture(zoom_position_text_texture);
 
     // playback speed
@@ -2363,10 +2377,13 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
     const int playack_speed_text_height = text_surface->h;
     SDL_FreeSurface(text_surface);
 
-    text_x = drawable_width_ / 2 - playack_speed_text_width / 2 - border_extension_;
-    text_y = drawable_height_ - line1_y_ - zoom_position_text_height;
-
-    render_text(text_x, text_y, playack_speed_text_texture, playack_speed_text_width, playack_speed_text_height, border_extension_, false);
+    // playback speed 显示在 toolbar 内中央下方
+    {
+      const int sx = drawable_width_ / 2 - playack_speed_text_width / 2;
+      const int sy = drawable_height_ - toolbar_drawable_height_ / 2 - playack_speed_text_height / 2 + static_cast<int>(10 * font_scale_);
+      SDL_Rect s_dst = {sx, sy, playack_speed_text_width, playack_speed_text_height};
+      SDL_RenderCopy(renderer_, playack_speed_text_texture, nullptr, &s_dst);
+    }
     SDL_DestroyTexture(playack_speed_text_texture);
 
     // frame step buttons: |< [play/pause] >|
@@ -2391,13 +2408,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
       const int btn_spacing = static_cast<int>(12 * font_scale_);
       const int total_w = prev_w + pp_w + next_w + btn_spacing * 2;
-      const int btn_y = drawable_height_ - line1_y_ - zoom_position_text_height - prev_h - static_cast<int>(8 * font_scale_);
+      // 中央按钮在 toolbar 内垂直居中
+      const int btn_y = drawable_height_ - toolbar_drawable_height_ / 2 - prev_h / 2;
       int bx = drawable_width_ / 2 - total_w / 2;
 
       auto draw_btn = [&](SDL_Texture* tex, int w, int h, int x, int y, SDL_Rect& hit_rect) {
-        SDL_Rect bg = {x - border_extension_, y - border_extension_, w + double_border_extension_, h + double_border_extension_};
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-        SDL_RenderFillRect(renderer_, &bg);
+        // toolbar 内按钮无需半透明背景
         SDL_Rect dst = {x, y, w, h};
         SDL_RenderCopy(renderer_, tex, nullptr, &dst);
         hit_rect = {static_cast<int>((x - border_extension_) / drawable_to_window_width_factor_),
@@ -2456,15 +2472,16 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
   }
 
   if (mode_ == Mode::SPLIT && show_hud_ && compare_mode) {
-    // render movable slider(s)
+    // render movable slider(s)，只渲染到视频区域（不穿过 toolbar）
+    const int split_line_bottom = drawable_height_ - toolbar_drawable_height_;
     SDL_SetRenderDrawColor(renderer_, 255, 255, 255, SDL_ALPHA_OPAQUE);
-    SDL_RenderDrawLine(renderer_, mouse_drawable_x, 0, mouse_drawable_x, drawable_height_);
+    SDL_RenderDrawLine(renderer_, mouse_drawable_x, 0, mouse_drawable_x, split_line_bottom);
 
     if (zoom_left_) {
-      SDL_RenderDrawLine(renderer_, dst_half_zoomed_size, drawable_height_ - dst_zoomed_size, dst_half_zoomed_size, drawable_height_);
+      SDL_RenderDrawLine(renderer_, dst_half_zoomed_size, split_line_bottom - dst_zoomed_size, dst_half_zoomed_size, split_line_bottom);
     }
     if (zoom_right_) {
-      SDL_RenderDrawLine(renderer_, drawable_width_ - dst_half_zoomed_size - 1, drawable_height_ - dst_zoomed_size, drawable_width_ - dst_half_zoomed_size - 1, drawable_height_);
+      SDL_RenderDrawLine(renderer_, drawable_width_ - dst_half_zoomed_size - 1, split_line_bottom - dst_zoomed_size, drawable_width_ - dst_half_zoomed_size - 1, split_line_bottom);
     }
   }
 

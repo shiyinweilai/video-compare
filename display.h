@@ -127,6 +127,7 @@ class Display {
   int drawable_height_;
   int window_width_;
   int window_height_;
+  int toolbar_drawable_height_{0};  // 底部工具栏高度（drawable 坐标）
   float drawable_to_window_width_factor_;
   float drawable_to_window_height_factor_;
   float video_to_window_width_factor_;
