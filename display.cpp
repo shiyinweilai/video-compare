@@ -200,6 +200,13 @@ auto get_metadata_int_value = [](const AVFrame* frame, const std::string& key, c
 };
 
 SDL::SDL() {
+#ifdef _WIN32
+  // Windows 上必须在 SDL_Init 之前设置 DPI Awareness，
+  // 否则系统会以 DPI 虚拟化模式运行，renderer 输出被系统拉伸模糊。
+  // "permonitorv2" 支持 Win10 1703+，SDL 会自动回退到 "permonitor" 或 "system"。
+  // 注意：不设置 SDL_HINT_WINDOWS_DPI_SCALING，由代码自行处理坐标缩放。
+  SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
   check_sdl(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) == 0, "SDL init");
   check_sdl(TTF_Init() == 0, "TTF init");
 }
@@ -343,7 +350,9 @@ Display::Display(const int display_number,
   SDL_RenderClear(renderer_);
   SDL_RenderPresent(renderer_);
 
-  SDL_GL_GetDrawableSize(window_, &drawable_width_, &drawable_height_);
+  // 使用 SDL_GetRendererOutputSize 获取 renderer 实际物理像素输出尺寸
+  // （在 Windows Per-Monitor DPI Aware 模式下比 SDL_GL_GetDrawableSize 更可靠）
+  SDL_GetRendererOutputSize(renderer_, &drawable_width_, &drawable_height_);
   SDL_GetWindowSize(window_, &window_width_, &window_height_);
 
   // Check if window is larger than display and warn user
@@ -2723,7 +2732,7 @@ void Display::handle_event(const SDL_Event& event) {
         case SDL_WINDOWEVENT_SIZE_CHANGED:
         case SDL_WINDOWEVENT_RESIZED: {
           // Window was resized: refresh scaling factors so drawing and mouse mapping stay correct
-          SDL_GL_GetDrawableSize(window_, &drawable_width_, &drawable_height_);
+          SDL_GetRendererOutputSize(renderer_, &drawable_width_, &drawable_height_);
           SDL_GetWindowSize(window_, &window_width_, &window_height_);
 
           drawable_to_window_width_factor_ = static_cast<float>(drawable_width_) / static_cast<float>(window_width_);
