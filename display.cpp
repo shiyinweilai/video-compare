@@ -35,7 +35,7 @@ static const SDL_Color LOOP_PP_LABEL_COLOR = {191, 95, 60, 0};
 static const SDL_Color TEXT_COLOR = {255, 255, 255, 0};
 static const SDL_Color HELP_TEXT_PRIMARY_COLOR = {255, 255, 255, 0};
 static const SDL_Color HELP_TEXT_ALTERNATE_COLOR = {255, 255, 192, 0};
-static const SDL_Color POSITION_COLOR = {0, 122, 255, 0};
+static const SDL_Color POSITION_COLOR = {255, 255, 255, 0};
 static const SDL_Color TARGET_COLOR = {200, 200, 140, 0};
 static const SDL_Color ZOOM_COLOR = {255, 165, 0, 0};
 static const SDL_Color PLAYBACK_SPEED_COLOR = {0, 192, 160, 0};
@@ -267,16 +267,39 @@ Display::Display(const int display_number,
 
   const bool user_specified_window_size = (std::get<0>(window_size) >= 0 || std::get<1>(window_size) >= 0);
 
-  // 目标：初始化窗口尽量按视频分辨率（像素）来建，避免为了“放进可用区域”而缩放导致模糊。
+  // 目标：初始化窗口尽量按视频分辨率（像素）来建，避免为了"放进可用区域"而缩放导致模糊。
   // 只有当用户显式传了 -W（window_size）时，才按用户尺寸/等比推导。
   if (!user_specified_window_size) {
     window_width = auto_width;
     window_height = auto_height;
 
-    window_x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
-    window_y = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
-  } else {
-    if (std::get<0>(window_size) < 0) {
+    if (fit_window_to_usable_bounds) {
+      const int usable_width = std::max(bounds.w - border_width, min_width);
+      constexpr int toolbar_reserve = 52;
+      const int usable_height = std::max(bounds.h - border_height - toolbar_reserve, min_height);
+      const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
+
+      if (window_width > usable_width || window_height > usable_height) {
+        if (static_cast<float>(usable_width) / static_cast<float>(usable_height) > aspect_ratio) {
+          window_height = usable_height;
+          window_width = static_cast<int>(window_height * aspect_ratio);
+        } else {
+          window_width = usable_width;
+          window_height = static_cast<int>(window_width / aspect_ratio);
+        }
+      }
+      window_height += toolbar_reserve;
+
+      window_x = bounds.x + (usable_width - window_width + border_width) / 2;
+      window_y = bounds.y + (usable_height - (window_height - toolbar_reserve) + border_height) / 2 + border_width;
+#ifdef __linux__
+      window_y -= 2 * border_width + 4;
+#endif
+    } else {
+      window_x = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
+      window_y = SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_number);
+    }
+  } else {    if (std::get<0>(window_size) < 0) {
       window_height = std::get<1>(window_size);
       window_width = static_cast<float>(auto_width) / static_cast<float>(auto_height) * window_height;
     } else if (std::get<1>(window_size) < 0) {
