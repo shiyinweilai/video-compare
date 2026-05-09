@@ -28,14 +28,14 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-static const SDL_Color BACKGROUND_COLOR = {54, 69, 79, 0};
+static const SDL_Color BACKGROUND_COLOR = {10, 10, 10, 0};
 static const SDL_Color LOOP_OFF_LABEL_COLOR = {0, 0, 0, 0};
 static const SDL_Color LOOP_FW_LABEL_COLOR = {80, 127, 255, 0};
 static const SDL_Color LOOP_PP_LABEL_COLOR = {191, 95, 60, 0};
 static const SDL_Color TEXT_COLOR = {255, 255, 255, 0};
 static const SDL_Color HELP_TEXT_PRIMARY_COLOR = {255, 255, 255, 0};
 static const SDL_Color HELP_TEXT_ALTERNATE_COLOR = {255, 255, 192, 0};
-static const SDL_Color POSITION_COLOR = {255, 255, 192, 0};
+static const SDL_Color POSITION_COLOR = {0, 122, 255, 0};
 static const SDL_Color TARGET_COLOR = {200, 200, 140, 0};
 static const SDL_Color ZOOM_COLOR = {255, 165, 0, 0};
 static const SDL_Color PLAYBACK_SPEED_COLOR = {0, 192, 160, 0};
@@ -1038,33 +1038,45 @@ void Display::render_text(const int x, const int y, SDL_Texture* texture, const 
 
 void Display::render_progress_dots(const float position, const float progress, const bool is_top) {
   if (duration_ > 0) {
-    const float dot_size = 2.f * font_scale_;
-
-    const int dot_width = std::round(dot_size);
-    const int dot_height = std::round(dot_size);
-
-    // 进度条渲染在 toolbar 顶部边缘：左视频在上半，右视频在下半
+    // ── 统一进度条：位于 toolbar 顶部，高度 8dp ──
+    const int bar_h = std::max(static_cast<int>(std::round(8.f * font_scale_)), 4);
     const int toolbar_top = drawable_height_ - toolbar_drawable_height_;
-    const int y_offset = is_top ? toolbar_top + 1 : toolbar_top + dot_height + 2;
 
-    const int x_position = std::round(position * drawable_width_ / duration_);
-    const int x_progress = std::round(progress * drawable_width_ / duration_);
+    // 两条进度条（左/右视频）各占一半高度，上下排列
+    const int half_h = std::max(bar_h / 2, 2);
+    const int y_top = toolbar_top;
+    const int y_offset = is_top ? y_top : y_top + half_h;
+    const int track_h = half_h;
 
-    for (int x = 0; x < x_position; x++) {
-      if (x % (2 * dot_width) < dot_width) {
-        SDL_SetRenderDrawColor(renderer_, POSITION_COLOR.r, POSITION_COLOR.g, POSITION_COLOR.b, BACKGROUND_ALPHA * 3 / 2);
-      } else {
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA);
-      }
-
-      SDL_RenderDrawLine(renderer_, x, y_offset, x, y_offset + dot_height - 1);
+    // 更新 seek_bar_rect_（window 坐标，供鼠标命中检测）
+    // 两条合并为一个命中区域（整个进度条区域）
+    if (is_top) {
+      // 转换为 window 坐标
+      const int bar_win_y = static_cast<int>(y_top / drawable_to_window_height_factor_);
+      const int bar_win_h = static_cast<int>(bar_h / drawable_to_window_height_factor_);
+      seek_bar_rect_ = {0, bar_win_y, window_width_, std::max(bar_win_h, 8)};
     }
 
-    // draw current frame
-    SDL_SetRenderDrawColor(renderer_, POSITION_COLOR.r, POSITION_COLOR.g, POSITION_COLOR.b, BACKGROUND_ALPHA * 2);
+    const int x_position = std::round(position * drawable_width_ / duration_);
 
-    const SDL_Rect current_frame = {x_position, y_offset, x_progress - x_position, dot_height};
-    SDL_RenderDrawRect(renderer_, &current_frame);
+    // 1. 轨道背景（深灰）
+    SDL_SetRenderDrawColor(renderer_, 45, 45, 45, 220);
+    SDL_Rect track_bg = {0, y_offset, drawable_width_, track_h};
+    SDL_RenderFillRect(renderer_, &track_bg);
+
+    // 2. 已播放部分（主色高亮）
+    if (x_position > 0) {
+      SDL_SetRenderDrawColor(renderer_, POSITION_COLOR.r, POSITION_COLOR.g, POSITION_COLOR.b, 220);
+      SDL_Rect played = {0, y_offset, x_position, track_h};
+      SDL_RenderFillRect(renderer_, &played);
+    }
+
+    // 3. 当前帧指示器（亮色竖线 + 小圆头）
+    const int indicator_w = std::max(static_cast<int>(std::round(2.f * font_scale_)), 2);
+    const int indicator_x = std::max(x_position - indicator_w / 2, 0);
+    SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
+    SDL_Rect indicator = {indicator_x, y_offset, indicator_w, track_h};
+    SDL_RenderFillRect(renderer_, &indicator);
   }
 }
 
@@ -2010,13 +2022,13 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
   // 渲染底部 toolbar 背景（深色条，与视频区域分离）
   if (show_hud_ && toolbar_drawable_height_ > 0) {
-    static const SDL_Color TOOLBAR_BG = {28, 32, 36, 255};
+    static const SDL_Color TOOLBAR_BG = {18, 18, 18, 255};
     SDL_SetRenderDrawColor(renderer_, TOOLBAR_BG.r, TOOLBAR_BG.g, TOOLBAR_BG.b, TOOLBAR_BG.a);
     SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
     SDL_Rect toolbar_rect = {0, drawable_height_ - toolbar_drawable_height_, drawable_width_, toolbar_drawable_height_};
     SDL_RenderFillRect(renderer_, &toolbar_rect);
     // 顶部分隔线
-    SDL_SetRenderDrawColor(renderer_, 60, 65, 72, 255);
+    SDL_SetRenderDrawColor(renderer_, 40, 40, 40, 255);
     SDL_RenderDrawLine(renderer_, 0, drawable_height_ - toolbar_drawable_height_, drawable_width_, drawable_height_ - toolbar_drawable_height_);
   }
 
@@ -2143,7 +2155,25 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       const std::string left_picture_type(1, av_get_picture_type_char(left_frame->pict_type));
       const int64_t left_frame_dur = ffmpeg::frame_duration(left_frame);
       const int64_t left_frame_num = (left_frame_dur > 0) ? (left_frame->pts / left_frame_dur) : 0;
-      const std::string left_pos_str = format_position(left_position, true) + " " + left_picture_type + " #" + std::to_string(left_frame_num) + format_position_difference(left_position, right_position);
+      // 播放速度字符串（用于附加到视频信息行）
+      const float left_spd_val = 1000000.0f * playback_speed_factor_ / float(std::max(ffmpeg::frame_duration(left_frame), ffmpeg::frame_duration(right_frame)));
+      const uint64_t left_spd_rounded = lrintf(left_spd_val * 1000);
+      std::string left_spd_str;
+      if (left_spd_rounded < 1000) left_spd_str = string_sprintf("%1.2f", left_spd_val);
+      else if (left_spd_rounded % 1000 && left_spd_rounded < 240000) left_spd_str = (left_spd_rounded % 100 && left_spd_rounded < 60000) ? string_sprintf("%1.2f", left_spd_val) : string_sprintf("%1.1f", left_spd_val);
+      else left_spd_str = string_sprintf("%1.0f", left_spd_val);
+      // 缩放倍率字符串
+      const uint64_t left_zoom_rounded = lrintf(global_zoom_factor_ * 1000);
+      int left_zoom_tz = (left_zoom_rounded % 10) > 0 ? 0 : 1;
+      left_zoom_tz += (left_zoom_rounded % 100) > 0 ? 0 : 1;
+      left_zoom_tz += (left_zoom_rounded % 1000) > 0 ? 0 : 1;
+      std::string left_zoom_str;
+      if (global_zoom_factor_ < 1e-1 || (left_zoom_tz == 0 && left_zoom_rounded < 1000)) left_zoom_str = string_sprintf("x%1.3f", global_zoom_factor_);
+      else if (left_zoom_tz <= 1 && left_zoom_rounded < 10000) left_zoom_str = string_sprintf("x%1.2f", global_zoom_factor_);
+      else if (left_zoom_tz <= 2 && left_zoom_rounded < 100000) left_zoom_str = string_sprintf("x%1.1f", global_zoom_factor_);
+      else left_zoom_str = string_sprintf("x%1.0f", global_zoom_factor_);
+      const std::string left_pos_str = format_position(left_position, true) + " " + left_picture_type + " #" + std::to_string(left_frame_num) + format_position_difference(left_position, right_position)
+                                       + "  @" + left_spd_str + "  " + left_zoom_str;
       text_surface = TTF_RenderText_Blended(small_font_, left_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* left_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       const int left_position_text_width = text_surface->w;
@@ -2168,18 +2198,18 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         const char* l_prev_label = "<<";
         const char* l_next_label = ">>";
 
-        SDL_Surface* lp_s = TTF_RenderUTF8_Blended(small_font_, l_prev_label, SIDE_BTN_COLOR);
+        SDL_Surface* lp_s = TTF_RenderUTF8_Blended(big_font_, l_prev_label, SIDE_BTN_COLOR);
         SDL_Texture* lp_tex = SDL_CreateTextureFromSurface(renderer_, lp_s);
         int lp_w = lp_s->w, lp_h = lp_s->h;
         SDL_FreeSurface(lp_s);
 
-        SDL_Surface* ln_s = TTF_RenderUTF8_Blended(small_font_, l_next_label, SIDE_BTN_COLOR);
+        SDL_Surface* ln_s = TTF_RenderUTF8_Blended(big_font_, l_next_label, SIDE_BTN_COLOR);
         SDL_Texture* ln_tex = SDL_CreateTextureFromSurface(renderer_, ln_s);
         int ln_w = ln_s->w, ln_h = ln_s->h;
         SDL_FreeSurface(ln_s);
 
         const int side_btn_spacing = static_cast<int>(10 * font_scale_);
-        // 左侧 << >> 按钮放在 toolbar 内垂直居中
+        // 左侧 << >> 按钮单行垂直居中
         const int line3_y = drawable_height_ - toolbar_drawable_height_ / 2 - lp_h / 2;
         int lbx = static_cast<int>(16 * font_scale_);
 
@@ -2211,7 +2241,25 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       // 使用左侧的frame_duration统一计算帧号，确保同源视频帧号对齐
       const int64_t right_frame_dur_for_num = ffmpeg::frame_duration(left_frame);
       const int64_t right_frame_num = (right_frame_dur_for_num > 0) ? (right_frame->pts / right_frame_dur_for_num) : 0;
-      const std::string right_pos_str = format_position(right_position, true) + " " + right_picture_type + " #" + std::to_string(right_frame_num) + format_position_difference(right_position, left_position);
+      // 播放速度字符串（右侧，与左侧相同）
+      const float right_spd_val = 1000000.0f * playback_speed_factor_ / float(std::max(ffmpeg::frame_duration(left_frame), ffmpeg::frame_duration(right_frame)));
+      const uint64_t right_spd_rounded = lrintf(right_spd_val * 1000);
+      std::string right_spd_str;
+      if (right_spd_rounded < 1000) right_spd_str = string_sprintf("%1.2f", right_spd_val);
+      else if (right_spd_rounded % 1000 && right_spd_rounded < 240000) right_spd_str = (right_spd_rounded % 100 && right_spd_rounded < 60000) ? string_sprintf("%1.2f", right_spd_val) : string_sprintf("%1.1f", right_spd_val);
+      else right_spd_str = string_sprintf("%1.0f", right_spd_val);
+      // 缩放倍率字符串（右侧）
+      const uint64_t right_zoom_rounded = lrintf(global_zoom_factor_ * 1000);
+      int right_zoom_tz = (right_zoom_rounded % 10) > 0 ? 0 : 1;
+      right_zoom_tz += (right_zoom_rounded % 100) > 0 ? 0 : 1;
+      right_zoom_tz += (right_zoom_rounded % 1000) > 0 ? 0 : 1;
+      std::string right_zoom_str;
+      if (global_zoom_factor_ < 1e-1 || (right_zoom_tz == 0 && right_zoom_rounded < 1000)) right_zoom_str = string_sprintf("x%1.3f", global_zoom_factor_);
+      else if (right_zoom_tz <= 1 && right_zoom_rounded < 10000) right_zoom_str = string_sprintf("x%1.2f", global_zoom_factor_);
+      else if (right_zoom_tz <= 2 && right_zoom_rounded < 100000) right_zoom_str = string_sprintf("x%1.1f", global_zoom_factor_);
+      else right_zoom_str = string_sprintf("x%1.0f", global_zoom_factor_);
+      const std::string right_pos_str = format_position(right_position, true) + " " + right_picture_type + " #" + std::to_string(right_frame_num) + format_position_difference(right_position, left_position)
+                                        + "  @" + right_spd_str + "  " + right_zoom_str;
       text_surface = TTF_RenderText_Blended(small_font_, right_pos_str.c_str(), POSITION_COLOR);
       SDL_Texture* right_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
       int right_position_text_width = text_surface->w;
@@ -2247,12 +2295,12 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         const char* r_prev_label = "<<";
         const char* r_next_label = ">>";
 
-        SDL_Surface* rp_s = TTF_RenderUTF8_Blended(small_font_, r_prev_label, SIDE_BTN_COLOR);
+        SDL_Surface* rp_s = TTF_RenderUTF8_Blended(big_font_, r_prev_label, SIDE_BTN_COLOR);
         SDL_Texture* rp_tex = SDL_CreateTextureFromSurface(renderer_, rp_s);
         int rp_w = rp_s->w, rp_h = rp_s->h;
         SDL_FreeSurface(rp_s);
 
-        SDL_Surface* rn_s = TTF_RenderUTF8_Blended(small_font_, r_next_label, SIDE_BTN_COLOR);
+        SDL_Surface* rn_s = TTF_RenderUTF8_Blended(big_font_, r_next_label, SIDE_BTN_COLOR);
         SDL_Texture* rn_tex = SDL_CreateTextureFromSurface(renderer_, rn_s);
         int rn_w = rn_s->w, rn_h = rn_s->h;
         SDL_FreeSurface(rn_s);
@@ -2260,7 +2308,7 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         const int side_btn_spacing = static_cast<int>(10 * font_scale_);
         const int right_btn_total_w = rp_w + rn_w + side_btn_spacing;
 
-        // 右侧 << >> 按钮放在 toolbar 内垂直居中，靠右对齐
+        // 右侧 << >> 按钮单行垂直居中，靠右对齐
         const int r_line3_y = drawable_height_ - toolbar_drawable_height_ / 2 - rp_h / 2;
         int rbx = drawable_width_ - static_cast<int>(16 * font_scale_) - right_btn_total_w;
 
@@ -2286,106 +2334,6 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
         SDL_DestroyTexture(rn_tex);
       }
     }
-    if (mouse_is_inside_window_ && duration_ > 0) {
-      // target seek position
-      float target_position = static_cast<float>(mouse_x_) / static_cast<float>(window_width_) * duration_;
-
-      const std::string target_pos_str = format_position(target_position, true);
-      text_surface = TTF_RenderText_Blended(small_font_, target_pos_str.c_str(), TARGET_COLOR);
-      SDL_Texture* target_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
-      const int target_position_text_width = text_surface->w;
-      const int target_position_text_height = text_surface->h;
-      SDL_FreeSurface(text_surface);
-
-      SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 2);
-      // target_position 显示在 toolbar 内右侧（左侧 << >> 按钮左边）
-      const int tp_x = drawable_width_ / 2 + static_cast<int>(60 * font_scale_);
-      const int tp_y = drawable_height_ - toolbar_drawable_height_ / 2 - target_position_text_height / 2;
-      SDL_Rect tp_dst = {tp_x, tp_y, target_position_text_width, target_position_text_height};
-      SDL_RenderCopy(renderer_, target_position_text_texture, nullptr, &tp_dst);
-
-      SDL_DestroyTexture(target_position_text_texture);
-    }
-
-    // zoom factor
-    std::string zoom_factor_str;
-    const uint64_t global_zoom_factor_rounded = lrintf(global_zoom_factor_ * 1000);
-    int global_zoom_factor_trailing_zeros = (global_zoom_factor_rounded % 10) > 0 ? 0 : 1;
-    global_zoom_factor_trailing_zeros += (global_zoom_factor_rounded % 100) > 0 ? 0 : 1;
-    global_zoom_factor_trailing_zeros += (global_zoom_factor_rounded % 1000) > 0 ? 0 : 1;
-
-    if (global_zoom_factor_ < 1e-1 || (global_zoom_factor_trailing_zeros == 0 && global_zoom_factor_rounded < 1000)) {
-      zoom_factor_str = string_sprintf("x%1.3f", global_zoom_factor_);
-    } else if (global_zoom_factor_trailing_zeros <= 1 && global_zoom_factor_rounded < 10000) {
-      zoom_factor_str = string_sprintf("x%1.2f", global_zoom_factor_);
-    } else if (global_zoom_factor_trailing_zeros <= 2 && global_zoom_factor_rounded < 100000) {
-      zoom_factor_str = string_sprintf("x%1.1f", global_zoom_factor_);
-    } else {
-      zoom_factor_str = string_sprintf("x%1.0f", global_zoom_factor_);
-    }
-
-    text_surface = TTF_RenderText_Blended(small_font_, zoom_factor_str.c_str(), ZOOM_COLOR);
-    SDL_Texture* zoom_position_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
-    const int zoom_position_text_width = text_surface->w;
-    const int zoom_position_text_height = text_surface->h;
-    SDL_FreeSurface(text_surface);
-
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, BACKGROUND_ALPHA * 2);
-
-    // zoom factor 显示在 toolbar 内左侧（左侧 << >> 按钮右边）
-    {
-      const int zx = static_cast<int>(16 * font_scale_);
-      const int zy = drawable_height_ - toolbar_drawable_height_ / 2 - zoom_position_text_height / 2 - static_cast<int>(10 * font_scale_);
-      SDL_Rect z_dst = {zx, zy, zoom_position_text_width, zoom_position_text_height};
-      SDL_RenderCopy(renderer_, zoom_position_text_texture, nullptr, &z_dst);
-    }
-    SDL_DestroyTexture(zoom_position_text_texture);
-
-    // playback speed
-    std::string playback_speed_str;
-    std::string playback_speed_factor_str;
-
-    const float playback_speed = 1000000.0f * playback_speed_factor_ / float(std::max(ffmpeg::frame_duration(left_frame), ffmpeg::frame_duration(right_frame)));
-    const uint64_t playback_speed_rounded = lrintf(playback_speed * 1000);
-
-    if (playback_speed_rounded < 1000) {
-      playback_speed_str = string_sprintf("%1.2f", playback_speed);
-    } else if (playback_speed_rounded % 1000 && playback_speed_rounded < 240000) {
-      if (playback_speed_rounded % 100 && playback_speed_rounded < 60000) {
-        playback_speed_str = string_sprintf("%1.2f", playback_speed);
-      } else {
-        playback_speed_str = string_sprintf("%1.1f", playback_speed);
-      }
-    } else {
-      playback_speed_str = string_sprintf("%1.0f", playback_speed);
-    }
-
-    if (playback_speed_level_ != 0) {
-      if (lrintf(playback_speed_factor_ * 100) < 10) {
-        playback_speed_factor_str = string_sprintf("|%1.1f%%", playback_speed_factor_ * 100);
-      } else {
-        playback_speed_factor_str = string_sprintf("|%1.0f%%", playback_speed_factor_ * 100);
-      }
-    } else {
-      playback_speed_factor_str = "";
-    }
-
-    const std::string united_playback_speed_str = string_sprintf("@%s%s", playback_speed_str.c_str(), playback_speed_factor_str.c_str());
-    text_surface = TTF_RenderText_Blended(small_font_, united_playback_speed_str.c_str(), PLAYBACK_SPEED_COLOR);
-    SDL_Texture* playack_speed_text_texture = SDL_CreateTextureFromSurface(renderer_, text_surface);
-    const int playack_speed_text_width = text_surface->w;
-    const int playack_speed_text_height = text_surface->h;
-    SDL_FreeSurface(text_surface);
-
-    // playback speed 显示在 toolbar 内中央下方
-    {
-      const int sx = drawable_width_ / 2 - playack_speed_text_width / 2;
-      const int sy = drawable_height_ - toolbar_drawable_height_ / 2 - playack_speed_text_height / 2 + static_cast<int>(10 * font_scale_);
-      SDL_Rect s_dst = {sx, sy, playack_speed_text_width, playack_speed_text_height};
-      SDL_RenderCopy(renderer_, playack_speed_text_texture, nullptr, &s_dst);
-    }
-    SDL_DestroyTexture(playack_speed_text_texture);
-
     // frame step buttons: |< [play/pause] >|
     {
       const char* prev_label = "|<";
@@ -2394,8 +2342,9 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       static const SDL_Color BTN_COLOR = {200, 200, 200, 0};
       static const SDL_Color BTN_ACTIVE_COLOR = {255, 255, 255, 0};
 
+      // 帧操作按钮使用 big_font_ 渲染，更大更易点击
       auto make_btn_texture = [&](const char* label, const SDL_Color& color) -> std::tuple<SDL_Texture*, int, int> {
-        SDL_Surface* s = TTF_RenderUTF8_Blended(small_font_, label, color);
+        SDL_Surface* s = TTF_RenderUTF8_Blended(big_font_, label, color);
         SDL_Texture* t = SDL_CreateTextureFromSurface(renderer_, s);
         int w = s->w, h = s->h;
         SDL_FreeSurface(s);
@@ -2406,9 +2355,9 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       auto [pp_tex, pp_w, pp_h] = make_btn_texture(pp_label, BTN_ACTIVE_COLOR);
       auto [next_tex, next_w, next_h] = make_btn_texture(next_label, BTN_COLOR);
 
-      const int btn_spacing = static_cast<int>(12 * font_scale_);
+      const int btn_spacing = static_cast<int>(14 * font_scale_);
       const int total_w = prev_w + pp_w + next_w + btn_spacing * 2;
-      // 中央按钮在 toolbar 内垂直居中
+      // toolbar 单行，按钮垂直居中
       const int btn_y = drawable_height_ - toolbar_drawable_height_ / 2 - prev_h / 2;
       int bx = drawable_width_ / 2 - total_w / 2;
 
@@ -2737,7 +2686,9 @@ void Display::handle_event(const SDL_Event& event) {
   auto update_cursor = [&]() {
     SDL_Cursor* cursor;
 
-    if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK) {
+    if (is_seeking_drag_) {
+      cursor = pan_mode_cursor_;
+    } else if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_RMASK) {
       cursor = pan_mode_cursor_;
     } else if (save_selected_area_ && selection_state_ != SelectionState::COMPLETED) {
       cursor = selection_mode_cursor_;
@@ -2840,6 +2791,14 @@ void Display::handle_event(const SDL_Event& event) {
     case SDL_MOUSEMOTION:
       SDL_GetMouseState(&mouse_x_, &mouse_y_);
 
+      // 进度条拖拽：实时 seek
+      if (is_seeking_drag_ && duration_ > 0) {
+        const float ratio = std::max(0.0F, std::min(1.0F, static_cast<float>(mouse_x_) / static_cast<float>(window_width_)));
+        seek_relative_ = ratio;
+        seek_from_start_ = true;
+        break;
+      }
+
       if (selection_state_ == SelectionState::STARTED) {
         selection_end_ = window_to_video_position(mouse_x_, mouse_y_, compute_zoom_rect());
 
@@ -2863,8 +2822,16 @@ void Display::handle_event(const SDL_Event& event) {
       }
       break;
     case SDL_MOUSEBUTTONDOWN:
-      if (event_.button.button == SDL_BUTTON_LEFT && show_hud_) {
+      if (event_.button.button == SDL_BUTTON_LEFT && show_hud_ && duration_ > 0) {
         SDL_Point click_pt = {mouse_x_, mouse_y_};
+        // 进度条点击/拖拽开始
+        if (SDL_PointInRect(&click_pt, &seek_bar_rect_)) {
+          is_seeking_drag_ = true;
+          const float ratio = std::max(0.0F, std::min(1.0F, static_cast<float>(mouse_x_) / static_cast<float>(window_width_)));
+          seek_relative_ = ratio;
+          seek_from_start_ = true;
+          break;
+        }
         if (SDL_PointInRect(&click_pt, &btn_prev_frame_)) {
           frame_navigation_delta_--;
           break;
@@ -2914,8 +2881,15 @@ void Display::handle_event(const SDL_Event& event) {
       update_cursor();
       break;
     case SDL_MOUSEBUTTONUP:
-      if (event_.button.button == SDL_BUTTON_LEFT && selection_state_ == SelectionState::STARTED) {
-        selection_state_ = SelectionState::COMPLETED;
+      if (event_.button.button == SDL_BUTTON_LEFT) {
+        // 结束进度条拖拽
+        if (is_seeking_drag_) {
+          is_seeking_drag_ = false;
+          break;
+        }
+        if (selection_state_ == SelectionState::STARTED) {
+          selection_state_ = SelectionState::COMPLETED;
+        }
       }
       update_cursor();
       break;

@@ -183,6 +183,10 @@ class Display {
   int64_t previous_right_frame_pts_;
   bool timer_based_update_performed_;
 
+  // 进度条拖拽状态
+  bool is_seeking_drag_{false};       // 是否正在拖拽进度条
+  SDL_Rect seek_bar_rect_{0, 0, 0, 0};  // 进度条区域（window 坐标）
+
   // frame step button hit-test areas (in drawable coordinates)
   SDL_Rect btn_prev_frame_{0, 0, 0, 0};
   SDL_Rect btn_play_pause_{0, 0, 0, 0};
