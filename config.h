@@ -13,17 +13,6 @@ struct TimeShiftConfig {
   int64_t offset_ms{0};
 };
 
-struct ScopesConfig {
-  bool histogram{false};
-  bool vectorscope{false};
-  bool waveform{false};
-  std::string histogram_options;
-  std::string vectorscope_options;
-  std::string waveform_options;
-  int width{1024};  // total scope window width (two panes side-by-side)
-  int height{256};  // scope window height
-  bool always_on_top{true};
-};
 
 struct InputVideo {
   Side side;
@@ -75,5 +64,4 @@ struct VideoCompareConfig {
   InputVideo left{LEFT, "Left"};
   std::vector<InputVideo> right_videos;
 
-  ScopesConfig scopes;
 };

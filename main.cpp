@@ -11,7 +11,7 @@
 #include "string_utils.h"
 #include "version.h"
 #include "video_compare.h"
-#include "vmaf_calculator.h"
+
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -546,14 +546,6 @@ int main(int argc, char** argv) {
          {"left-filters", {"-l", "--left-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the left video (e.g. format=gray,crop=iw:ih-240)", 1},
          {"right-filters", {"-r", "--right-filters"}, "specify a comma-separated list of FFmpeg filters to be applied to the right video (e.g. yadif,hqdn3d,pad=iw+320:ih:160:0)", 1},
          {"find-filters", {"--find-filters"}, "find FFmpeg video filters that match the provided search term (e.g. 'scale', 'libvmaf' or 'dnn'; use \"\" to list all)", 1},
-         {"histogram-window", {"--histogram-window"}, "open always-on-top histogram scopes window", 0},
-         {"vectorscope-window", {"--vectorscope-window"}, "open always-on-top vectorscope scopes window", 0},
-         {"waveform-window", {"--waveform-window"}, "open always-on-top waveform scopes window", 0},
-         {"histogram-options", {"--histogram-options"}, "histogram FFmpeg filter options (e.g. 'display_mode=parade:colors_mode=coloronblack:level_height=256:levels_mode=logarithmic')", 1},
-         {"vectorscope-options", {"--vectorscope-options"}, "vectorscope FFmpeg filter options (e.g. 'mode=color4:graticule=green:envelope=instant+peak:flags=name+white+black')", 1},
-         {"waveform-options", {"--waveform-options"}, "waveform FFmpeg filter options (e.g. 'graticule=orange:display=stack:scale=ire:flags=numbers+dots:intensity=0.1:components=7:filter=lowpass')", 1},
-         {"scope-size", {"--scope-size"}, "set initial scope window size as WxH (total width by height); scope windows are resizable; default 1024x256", 1},
-         {"scope-notop", {"--scope-notop"}, "do not keep scope windows always on top", 0},
          {"find-protocols", {"--find-protocols"}, "find FFmpeg input protocols that match the provided search term (e.g. 'ipfs', 'srt', or 'rtmp'; use \"\" to list all)", 1},
          {"demuxer", {"--demuxer"}, "left FFmpeg video demuxer name for both sides, specified as [type?][:options?] (e.g. 'rawvideo:pixel_format=rgb24,video_size=320x240,framerate=10')", 1},
          {"left-demuxer", {"--left-demuxer"}, "left FFmpeg video demuxer name, specified as [type?][:options?]", 1},
@@ -567,7 +559,6 @@ int main(int argc, char** argv) {
          {"left-hwaccel", {"--left-hwaccel"}, "left FFmpeg video hardware acceleration, specified as [type][:device?[:options?]] (e.g. 'cuda', 'cuda:1' or 'vulkan')", 1},
          {"right-hwaccel", {"--right-hwaccel"}, "right FFmpeg video hardware acceleration, specified as [type][:device?[:options?]]", 1},
          {"find-hwaccels", {"--find-hwaccels"}, "find FFmpeg video hardware acceleration types that match the provided search term (e.g. 'videotoolbox' or 'vulkan'; use \"\" to list all)", 1},
-         {"libvmaf-options", {"--libvmaf-options"}, "libvmaf FFmpeg filter options (e.g. 'model=version=vmaf_4k_v0.6.1' or 'model=version=vmaf_v0.6.1\\\\:name=hd|version=vmaf_4k_v0.6.1\\\\:name=4k')", 1},
          {"disable-auto-filters", {"--no-auto-filters"}, "disable the default behaviour of automatically injecting filters for deinterlacing, DAR correction, frame rate harmonization, rotation and colorimetry", 0}}};
 
     argagg::parser_results args;
@@ -751,33 +742,6 @@ int main(int argc, char** argv) {
         right_template.tone_mapping_mode = (tone_mapping_mode_spec == left_tone_mapping_mode) ? config.left.tone_mapping_mode : parse_tone_mapping_mode(get_nth_token_or_empty(tone_mapping_mode_spec, ':', 1));
       }
 
-      // scopes
-      config.scopes.histogram = args["histogram-window"];
-      config.scopes.vectorscope = args["vectorscope-window"];
-      config.scopes.waveform = args["waveform-window"];
-      if (args["histogram-options"]) {
-        config.scopes.histogram_options = static_cast<const std::string&>(args["histogram-options"]);
-      }
-      if (args["vectorscope-options"]) {
-        config.scopes.vectorscope_options = static_cast<const std::string&>(args["vectorscope-options"]);
-      }
-      if (args["waveform-options"]) {
-        config.scopes.waveform_options = static_cast<const std::string&>(args["waveform-options"]);
-      }
-      if (args["scope-size"]) {
-        const std::string scope_size_arg = args["scope-size"];
-        const std::regex scope_size_re("^(\\d+)x(\\d+)$");
-        std::smatch sm;
-        if (!std::regex_match(scope_size_arg, sm, scope_size_re)) {
-          throw std::logic_error{"Cannot parse --scope-size argument (required format: [width]x[height], e.g. 1024x256)"};
-        }
-        config.scopes.width = std::stoi(sm[1].str());
-        config.scopes.height = std::stoi(sm[2].str());
-      }
-      if (args["scope-notop"]) {
-        config.scopes.always_on_top = false;
-      }
-
       // video filters
       if (args["filters"]) {
         config.left.video_filters = static_cast<const std::string&>(args["filters"]);
@@ -902,9 +866,6 @@ int main(int argc, char** argv) {
         config.right_videos.push_back(right_video);
       }
 
-      if (args["libvmaf-options"]) {
-        VMAFCalculator::instance().set_libvmaf_options(args["libvmaf-options"]);
-      }
 
       av_log_set_callback(sa_av_log_callback);
 

@@ -49,7 +49,6 @@ class LanczosScaler {
 };
 // ── LanczosScaler end ──────────────────────────────────────────────────────
 #include "row_workers.h"
-#include "scope_window.h"
 #include "string_utils.h"
 extern "C" {
 #include <libavutil/frame.h>
@@ -204,9 +203,6 @@ class Display {
   // Subtraction mode settings
   DiffMode diff_mode_{DiffMode::AbsLinear};
   bool diff_luma_only_{false};
-
-  // Scope windows toggle requests
-  std::array<bool, ScopeWindow::kNumScopes> toggle_scope_window_requested_{{false, false, false}};
 
   // Rectangle selection state
   enum class SelectionState { NONE, STARTED, COMPLETED };
@@ -451,7 +447,6 @@ class Display {
   void set_pending_message(const std::string& message);
 
   // Bring focus back to the main window (avoid scope windows stealing keyboard focus)
-  void focus_main_window();
 
   // Input model:
   // - The main loop centrally pumps SDL events (single SDL_PollEvent loop).
@@ -487,8 +482,6 @@ class Display {
 
   std::pair<SDL_Rect, SDL_Rect> get_visible_rois_in_single_frame_coordinates() const;
   SDL_Rect get_visible_roi_in_single_frame_coordinates() const;
-
-  bool get_toggle_scope_window_requested(const ScopeWindow::Type type) const;
 
   // Multiple right video support
   void set_num_right_videos(const size_t num_right_videos);

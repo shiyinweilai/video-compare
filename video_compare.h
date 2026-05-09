@@ -14,7 +14,6 @@
 #include "display.h"
 #include "format_converter.h"
 #include "queue.h"
-#include "scope_manager.h"
 #include "timer.h"
 #include "video_decoder.h"
 #include "video_filterer.h"
@@ -22,7 +21,6 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
-class ScopeWindow;
 
 using AVPacketUniquePtr = std::unique_ptr<AVPacket, std::function<void(AVPacket*)>>;
 using AVFrameSharedPtr = std::shared_ptr<AVFrame>;
@@ -136,48 +134,6 @@ class VideoCompare {
   void compare();
 
  private:
-  class ScopeUpdateState {
-   public:
-    ScopeUpdateState() { reset(); }
-
-    struct Sample {
-      int64_t left_pts;
-      int64_t right_pts;
-      ScopeWindow::Roi roi;
-      bool swapped;
-      const AVFrame* left_ptr;
-      const AVFrame* right_ptr;
-
-      bool operator==(const Sample& other) const {
-        const bool same_pts = left_pts == other.left_pts && right_pts == other.right_pts;
-        const bool same_roi = roi.x == other.roi.x && roi.y == other.roi.y && roi.w == other.roi.w && roi.h == other.roi.h;
-        const bool same_swap = swapped == other.swapped;
-        const bool same_ptrs = left_ptr == other.left_ptr && right_ptr == other.right_ptr;
-
-        return same_pts && same_roi && same_swap && same_ptrs;
-      }
-    };
-
-    static Sample capture(const AVFrame* left_frame, const AVFrame* right_frame, const ScopeWindow::Roi& roi, const bool swapped) {
-      return Sample{
-          left_frame ? left_frame->pts : std::numeric_limits<int64_t>::min(), right_frame ? right_frame->pts : std::numeric_limits<int64_t>::min(), roi, swapped, left_frame, right_frame,
-      };
-    }
-
-    bool has_changed(const Sample& sample) const { return (!initialized_) || !(sample == state_); }
-
-    void update(const Sample& sample) {
-      state_ = sample;
-      initialized_ = true;
-    }
-
-    void reset() { initialized_ = false; }
-
-   private:
-    Sample state_;
-    bool initialized_{false};
-  };
-
   const bool same_decoded_video_both_sides_;
 
   const Display::Loop auto_loop_mode_;
@@ -205,9 +161,6 @@ class VideoCompare {
 
   size_t active_right_index_{0};
   std::map<Side, RightVideoInfo> right_video_info_;
-
-  std::unique_ptr<ScopeManager> scope_manager_;
-  ScopeUpdateState scope_update_state_;
 
   std::vector<std::thread> stages_;
 

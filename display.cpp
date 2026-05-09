@@ -16,11 +16,10 @@
 #include "ffmpeg.h"
 #include "format_converter.h"
 #include "png_saver.h"
-#include "scope_window.h"
 #include "source_code_pro_regular_ttf.h"
 #include "version.h"
 #include "video_compare_icon.h"
-#include "vmaf_calculator.h"
+
 extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavutil/imgutils.h>
@@ -1985,13 +1984,11 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
 
         const std::string psnr = compute_psnr(left_gray, right_gray, crop_width, crop_height);
         const std::string ssim = compute_ssim(left_gray, right_gray, crop_width, crop_height);
-        const std::string vmaf = (left_crop && right_crop) ? VMAFCalculator::instance().compute(left_crop, right_crop) : "n/a";
-
         const std::string roi_str =
             (crop_width < video_width_ || crop_height < video_height_) ? string_sprintf("  (%d,%d)-(%d,%d)", effective_roi_left.x, effective_roi_left.y, effective_roi_left.x + crop_width - 1, effective_roi_left.y + crop_height - 1) : "";
 
-        std::cout << string_sprintf("Metrics: [%s|%s] PSNR(%s), SSIM(%s), VMAF(%s)%s", format_position(ffmpeg::pts_in_secs(left_frame), false).c_str(), format_position(ffmpeg::pts_in_secs(right_frame), false).c_str(), psnr.c_str(),
-                                    ssim.c_str(), vmaf.c_str(), roi_str.c_str())
+        std::cout << string_sprintf("Metrics: [%s|%s] PSNR(%s), SSIM(%s)%s", format_position(ffmpeg::pts_in_secs(left_frame), false).c_str(), format_position(ffmpeg::pts_in_secs(right_frame), false).c_str(), psnr.c_str(),
+                                    ssim.c_str(), roi_str.c_str())
                   << std::endl;
 
         delete[] left_gray;
@@ -2490,12 +2487,6 @@ void Display::set_pending_message(const std::string& message) {
   pending_message_ = message;
 }
 
-void Display::focus_main_window() {
-  if (window_ != nullptr) {
-    SDL_SetWindowInputFocus(window_);
-  }
-}
-
 float Display::compute_zoom_factor(const float zoom_level) const {
   return pow(ZOOM_STEP_SIZE, zoom_level);
 }
@@ -2696,7 +2687,6 @@ void Display::begin_input_frame() {
   shift_right_frames_ = 0;
   tick_playback_ = false;
   possibly_tick_playback_ = false;
-  toggle_scope_window_requested_.fill(false);
 }
 
 void Display::mark_input_received() {
@@ -2966,41 +2956,17 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_PERIOD:
           set_buffer_play_loop_mode(buffer_play_loop_mode_ != Loop::FORWARDONLY ? Loop::FORWARDONLY : Loop::OFF);
           break;
-        case SDLK_F1:
-          toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Histogram)] = true;
-          break;
         case SDLK_1:
         case SDLK_KP_1:
-          if (keymod & KMOD_SHIFT) {
-            // Fallback for layouts where F-keys are inconvenient
-            toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Histogram)] = true;
-          } else {
-            show_left_ = !show_left_;
-          }
-          break;
-        case SDLK_F2:
-          toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Vectorscope)] = true;
+          show_left_ = !show_left_;
           break;
         case SDLK_2:
         case SDLK_KP_2:
-          if (keymod & KMOD_SHIFT) {
-            // Fallback for layouts where F-keys are inconvenient
-            toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Vectorscope)] = true;
-          } else {
-            show_right_ = !show_right_;
-          }
-          break;
-        case SDLK_F3:
-          toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Waveform)] = true;
+          show_right_ = !show_right_;
           break;
         case SDLK_3:
         case SDLK_KP_3:
-          if (keymod & KMOD_SHIFT) {
-            // Fallback for layouts where F-keys are inconvenient
-            toggle_scope_window_requested_[ScopeWindow::index(ScopeWindow::Type::Waveform)] = true;
-          } else {
-            show_hud_ = !show_hud_;
-          }
+          show_hud_ = !show_hud_;
           break;
         case SDLK_0:
         case SDLK_KP_0:
@@ -3305,9 +3271,6 @@ bool Display::get_show_fps() const {
   return show_fps_;
 }
 
-bool Display::get_toggle_scope_window_requested(const ScopeWindow::Type type) const {
-  return toggle_scope_window_requested_[ScopeWindow::index(type)];
-}
 
 void Display::set_num_right_videos(const size_t num_right_videos) {
   num_right_videos_ = num_right_videos;
