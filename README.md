@@ -179,8 +179,8 @@ see all supported options.
 - Left arrow: Seek 1 second backward
 - Page down: Seek 600 seconds backward
 - Right arrow: Seek 1 second forward
-- J: Reduce playback speed
-- L: Increase playback speed
+- 慢速 button (toolbar): Reduce playback speed
+- 快速 button (toolbar): Increase playback speed
 - R: Re-center and reset zoom to 100% (x1)
 - 3: Toggle hide/show HUD
 - U: Toggle luminance-only subtraction mode
@@ -193,10 +193,6 @@ by moving the mouse while holding down the right button.
 Left-click the mouse to perform a time seek based on the horizontal position of the
 mouse cursor relative to the window width (the target position is shown in the lower
 right corner).
-
-Use `Ctrl+C` (Windows/Linux) or `Cmd+C` (macOS) to copy the current timestamp of the left video
-to the clipboard, and `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) to paste a timestamp from the
-clipboard and seek to that position.
 
 ## Build
 

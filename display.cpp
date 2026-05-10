@@ -262,7 +262,7 @@ Display::Display(const int display_number,
 
     if (fit_window_to_usable_bounds) {
       const int usable_width = std::max(bounds.w - border_width, min_width);
-      constexpr int toolbar_reserve = 52;
+      constexpr int toolbar_reserve = 72;
       const int usable_height = std::max(bounds.h - border_height - toolbar_reserve, min_height);
       const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
 
@@ -299,8 +299,8 @@ Display::Display(const int display_number,
 
     if (fit_window_to_usable_bounds) {
       const int usable_width = std::max(bounds.w - border_width, min_width);
-      // 预留底部 toolbar 高度（约 52 逻辑像素），避免窗口超出屏幕
-      constexpr int toolbar_reserve = 52;
+      // 预留底部 toolbar 高度（约 72 逻辑像素），避免窗口超出屏幕
+      constexpr int toolbar_reserve = 72;
       const int usable_height = std::max(bounds.h - border_height - toolbar_reserve, min_height);
 
       const float aspect_ratio = static_cast<float>(auto_width) / static_cast<float>(auto_height);
@@ -422,6 +422,11 @@ Display::Display(const int display_number,
   right_file_name_ = right_file_name;
   last_window_title_.clear();
 
+  // 两侧视频路径相同时提示用户
+  if (left_file_name == right_file_name) {
+    set_pending_message("Both videos are identical");
+  }
+
   // Initialize per-side UI state (file stems and file name textures)
   side_ui_[LEFT.as_simple_index()].file_stem = strip_ffmpeg_patterns(get_file_stem(left_file_name));
   side_ui_[RIGHT.as_simple_index()].file_stem = strip_ffmpeg_patterns(get_file_stem(right_file_name));
@@ -478,8 +483,8 @@ Display::Display(const int display_number,
 }
 
 void Display::update_viewport() {
-  // toolbar 高度：约 52 逻辑像素（乘以 DPI 缩放因子）
-  toolbar_drawable_height_ = static_cast<int>(52 * font_scale_);
+  // toolbar 高度：约 72 逻辑像素（乘以 DPI 缩放因子），含两行（按钮行 + 说明行）
+    toolbar_drawable_height_ = static_cast<int>(52 * font_scale_);
 
   // 视频可用区域（去掉底部 toolbar）
   const int video_area_w = drawable_width_;
@@ -2114,6 +2119,57 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
       SDL_DestroyTexture(prev_tex);
       SDL_DestroyTexture(pp_tex);
       SDL_DestroyTexture(next_tex);
+
+      // ── 同行：- / + 速度按钮 + fps 提示 ──
+      {
+        static const SDL_Color SPD_BTN_COLOR = {160, 200, 160, 0};
+        static const SDL_Color FPS_COLOR = {120, 120, 120, 0};
+
+        // - 按钮（左侧）
+        const char* slower_label = "-";
+        SDL_Surface* slower_s = TTF_RenderUTF8_Blended(big_font_, slower_label, SPD_BTN_COLOR);
+        SDL_Texture* slower_tex = SDL_CreateTextureFromSurface(renderer_, slower_s);
+        const int slower_w = slower_s->w, slower_h = slower_s->h;
+        SDL_FreeSurface(slower_s);
+        const int spd_btn_y = drawable_height_ - toolbar_drawable_height_ / 2 - slower_h / 2;
+        const int slower_x = drawable_width_ / 2 - total_w / 2 - slower_w - static_cast<int>(20 * font_scale_);
+        SDL_Rect slower_dst = {slower_x, spd_btn_y, slower_w, slower_h};
+        SDL_RenderCopy(renderer_, slower_tex, nullptr, &slower_dst);
+        btn_slower_ = {static_cast<int>((slower_x - border_extension_) / drawable_to_window_width_factor_),
+                       static_cast<int>((spd_btn_y - border_extension_) / drawable_to_window_height_factor_),
+                       static_cast<int>((slower_w + double_border_extension_) / drawable_to_window_width_factor_),
+                       static_cast<int>((slower_h + double_border_extension_) / drawable_to_window_height_factor_)};
+        SDL_DestroyTexture(slower_tex);
+
+        // + 按钮（右侧）
+        const char* faster_label = "+";
+        SDL_Surface* faster_s = TTF_RenderUTF8_Blended(big_font_, faster_label, SPD_BTN_COLOR);
+        SDL_Texture* faster_tex = SDL_CreateTextureFromSurface(renderer_, faster_s);
+        const int faster_w = faster_s->w, faster_h = faster_s->h;
+        SDL_FreeSurface(faster_s);
+        const int faster_x = drawable_width_ / 2 + total_w / 2 + static_cast<int>(20 * font_scale_);
+        SDL_Rect faster_dst = {faster_x, spd_btn_y, faster_w, faster_h};
+        SDL_RenderCopy(renderer_, faster_tex, nullptr, &faster_dst);
+        btn_faster_ = {static_cast<int>((faster_x - border_extension_) / drawable_to_window_width_factor_),
+                       static_cast<int>((spd_btn_y - border_extension_) / drawable_to_window_height_factor_),
+                       static_cast<int>((faster_w + double_border_extension_) / drawable_to_window_width_factor_),
+                       static_cast<int>((faster_h + double_border_extension_) / drawable_to_window_height_factor_)};
+        SDL_DestroyTexture(faster_tex);
+
+        // fps 提示（+ 按钮右侧同行）
+        const float fps_val = 1000000.0f * playback_speed_factor_ /
+                              float(std::max(ffmpeg::frame_duration(left_frame), ffmpeg::frame_duration(right_frame)));
+        const std::string fps_str = string_sprintf("%.2g fps", fps_val);
+        SDL_Surface* fps_s = TTF_RenderUTF8_Blended(small_font_, fps_str.c_str(), FPS_COLOR);
+        SDL_Texture* fps_tex = SDL_CreateTextureFromSurface(renderer_, fps_s);
+        const int fps_w = fps_s->w, fps_h = fps_s->h;
+        SDL_FreeSurface(fps_s);
+        const int fps_x = faster_x + faster_w + static_cast<int>(12 * font_scale_);
+        const int fps_y = spd_btn_y + (faster_h - fps_h) / 2;
+        SDL_Rect fps_dst = {fps_x, fps_y, fps_w, fps_h};
+        SDL_RenderCopy(renderer_, fps_tex, nullptr, &fps_dst);
+        SDL_DestroyTexture(fps_tex);
+      }
     }
 
     // 帧缓冲区位置指示器已移除
@@ -2567,6 +2623,17 @@ void Display::handle_event(const SDL_Event& event) {
           shift_right_frames_++;
           break;
         }
+        // 慢速 / 快速按钮
+        if (SDL_PointInRect(&click_pt, &btn_slower_)) {
+          update_playback_speed(playback_speed_level_ - 1);
+          possibly_tick_playback_ = true;
+          break;
+        }
+        if (SDL_PointInRect(&click_pt, &btn_faster_)) {
+          update_playback_speed(playback_speed_level_ + 1);
+          tick_playback_ = true;
+          break;
+        }
       }
       update_cursor();
       break;
@@ -2578,19 +2645,14 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         }
       }
+      if (event_.button.button == SDL_BUTTON_RIGHT) {
+        show_hud_ = !show_hud_;
+      }
       update_cursor();
       break;
     case SDL_KEYDOWN: {
       const SDL_Keymod keymod = static_cast<SDL_Keymod>(event_.key.keysym.mod);
       const SDL_Keycode keycode = event_.key.keysym.sym;
-
-      auto is_clipboard_mod_pressed = [keymod]() -> bool {
-#ifdef __APPLE__
-        return (keymod & KMOD_GUI);
-#else
-        return (keymod & KMOD_CTRL);
-#endif
-      };
 
       switch (keycode) {
         case SDLK_h:
@@ -2604,50 +2666,9 @@ void Display::handle_event(const SDL_Event& event) {
           buffer_play_loop_mode_ = Loop::OFF;
           tick_playback_ = play_;
           break;
-        case SDLK_3:
-        case SDLK_KP_3:
-          show_hud_ = !show_hud_;
+        case SDLK_v:
+          show_metadata_ = !show_metadata_;
           break;
-        case SDLK_c: {
-          if (is_clipboard_mod_pressed()) {
-            const float previous_left_frame_secs = previous_left_frame_pts_ * AV_TIME_TO_SEC;
-            const std::string previous_left_frame_secs_str = format_position(previous_left_frame_secs, false);
-
-            SDL_SetClipboardText(previous_left_frame_secs_str.c_str());
-
-            std::cout << "Copied to clipboard: " << previous_left_frame_secs_str << std::endl;
-          }
-          break;
-        }
-        case SDLK_v: {
-          if (is_clipboard_mod_pressed()) {
-            char* clip_text = SDL_GetClipboardText();
-
-            if (!clip_text) {
-              std::cerr << "Failed to get clipboard text: " << SDL_GetError() << std::endl;
-              return;
-            }
-
-            std::string clipboard_str(clip_text);
-            SDL_free(clip_text);
-
-            static const std::regex timestamp_regex(R"((?:(\d+):)?(?:(\d+):)?(\d+(?:\.\d+)?))");
-            std::smatch match;
-
-            if (std::regex_search(clipboard_str, match, timestamp_regex)) {
-              std::string timestamp = match.str();
-              std::cout << "Timestamp pasted: " << timestamp << std::endl;
-
-              seek_relative_ = parse_timestamps_to_seconds(timestamp) / static_cast<float>(duration_);
-              seek_from_start_ = true;
-            } else {
-              std::cout << "No valid timestamp found in clipboard." << std::endl;
-            }
-          } else {
-            show_metadata_ = !show_metadata_;
-          }
-          break;
-        }
         case SDLK_r:
           update_zoom_factor(1.0F);
           move_offset_ = Vector2D(0.0F, 0.0F);
@@ -2661,14 +2682,6 @@ void Display::handle_event(const SDL_Event& event) {
           break;
         case SDLK_RIGHT:
           seek_relative_ += 1.0F;
-          break;
-        case SDLK_j:
-          update_playback_speed(playback_speed_level_ - 1);
-          possibly_tick_playback_ = true;
-          break;
-        case SDLK_l:
-          update_playback_speed(playback_speed_level_ + 1);
-          tick_playback_ = true;
           break;
         case SDLK_0:
         case SDLK_KP_0:

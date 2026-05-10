@@ -225,6 +225,10 @@ class Display {
   SDL_Rect btn_right_prev_frame_{0, 0, 0, 0};
   SDL_Rect btn_right_next_frame_{0, 0, 0, 0};
 
+  // 播放速度按钮（慢速 / 快速）
+  SDL_Rect btn_slower_{0, 0, 0, 0};
+  SDL_Rect btn_faster_{0, 0, 0, 0};
+
   float global_zoom_level_{0.0F};
   float global_zoom_factor_{1.0F};
   Vector2D move_offset_{0.0F, 0.0F};
