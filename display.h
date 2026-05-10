@@ -185,6 +185,7 @@ class Display {
   bool show_hud_{true};
   bool subtraction_mode_{false};
   float seek_relative_{0.0F};
+  bool seek_to_start_{false};   // 专用 flag：从头 seek（ratio=0 时 combined_seek==0 无法触发普通 seek）
   int frame_buffer_offset_delta_{0};
   int frame_navigation_delta_{0};
   int shift_left_frames_{0};
@@ -228,6 +229,9 @@ class Display {
   // 播放速度按钮（慢速 / 快速）
   SDL_Rect btn_slower_{0, 0, 0, 0};
   SDL_Rect btn_faster_{0, 0, 0, 0};
+
+  // 从头播放按钮
+  SDL_Rect btn_restart_{0, 0, 0, 0};
 
   float global_zoom_level_{0.0F};
   float global_zoom_factor_{1.0F};
@@ -449,6 +453,7 @@ class Display {
   bool get_swap_left_right() const;
   float get_seek_relative() const;
   bool get_seek_from_start() const;
+  bool get_seek_to_start() const;
   int get_frame_buffer_offset_delta() const;
   int get_frame_navigation_delta() const;
   int get_shift_left_frames() const;

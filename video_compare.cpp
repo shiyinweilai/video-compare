@@ -766,6 +766,7 @@ void VideoCompare::compare() {
       }
 
       const float combined_seek = display_->get_seek_relative();
+      const bool seek_to_start = display_->get_seek_to_start();
 
       bool skip_update = false;
 
@@ -781,7 +782,7 @@ void VideoCompare::compare() {
         right_individual_offset = std::max(0, right_individual_offset - shift_right);
       }
 
-      if (combined_seek != 0.0F) {
+      if (combined_seek != 0.0F || seek_to_start) {
 
         // compute effective time shift
         static_right_time_shift = time_shift_offset_av_time_ + total_right_time_shifted * (right_ptr->delta_pts_ > 0 ? right_ptr->delta_pts_ : 10000);
@@ -863,7 +864,12 @@ void VideoCompare::compare() {
 #endif
             const bool right_seek_result = demuxers_[side]->seek(next_right_position, backward);
             if (!right_seek_result && !backward) {
-              seek_failed = true;
+              // 向前 seek 失败，改用 backward 重试，跳到最近的 I 帧
+              // 如果连 backward 也失败，尝试 seek 到文件末尾
+              if (!demuxers_[side]->seek(next_right_position, true)) {
+                const float end_pos = static_cast<float>(shortest_duration_) + right_state.start_time_ - 0.001f;
+                demuxers_[side]->seek(end_pos, true);
+              }
             }
           }
         }
@@ -873,7 +879,12 @@ void VideoCompare::compare() {
 #endif
         const bool left_seek_result = demuxers_[LEFT]->seek(next_left_position, backward);
         if (!left_seek_result && !backward) {
-          seek_failed = true;
+          // 向前 seek 失败，改用 backward 重试，跳到最近的 I 帧
+          // 如果连 backward 也失败，尝试 seek 到文件末尾
+          if (!demuxers_[LEFT]->seek(next_left_position, true)) {
+            const float end_pos = static_cast<float>(shortest_duration_) + left.start_time_ - 0.001f;
+            demuxers_[LEFT]->seek(end_pos, true);
+          }
         }
 
         // Restore all positions if any seek failed

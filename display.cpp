@@ -2141,6 +2141,23 @@ bool Display::possibly_refresh(const AVFrame* left_frame, const AVFrame* right_f
                        static_cast<int>((slower_h + double_border_extension_) / drawable_to_window_height_factor_)};
         SDL_DestroyTexture(slower_tex);
 
+        // 刷新/从头播放按钮（- 按钮左侧）
+        static const SDL_Color RESTART_BTN_COLOR = {180, 180, 220, 0};
+        const char* restart_label = "Rew";
+        SDL_Surface* restart_s = TTF_RenderUTF8_Blended(big_font_, restart_label, RESTART_BTN_COLOR);
+        SDL_Texture* restart_tex = SDL_CreateTextureFromSurface(renderer_, restart_s);
+        const int restart_w = restart_s->w, restart_h = restart_s->h;
+        SDL_FreeSurface(restart_s);
+        const int restart_y = drawable_height_ - toolbar_drawable_height_ / 2 - restart_h / 2;
+        const int restart_x = slower_x - restart_w - static_cast<int>(16 * font_scale_);
+        SDL_Rect restart_dst = {restart_x, restart_y, restart_w, restart_h};
+        SDL_RenderCopy(renderer_, restart_tex, nullptr, &restart_dst);
+        btn_restart_ = {static_cast<int>((restart_x - border_extension_) / drawable_to_window_width_factor_),
+                        static_cast<int>((restart_y - border_extension_) / drawable_to_window_height_factor_),
+                        static_cast<int>((restart_w + double_border_extension_) / drawable_to_window_width_factor_),
+                        static_cast<int>((restart_h + double_border_extension_) / drawable_to_window_height_factor_)};
+        SDL_DestroyTexture(restart_tex);
+
         // + 按钮（右侧）
         const char* faster_label = "+";
         SDL_Surface* faster_s = TTF_RenderUTF8_Blended(big_font_, faster_label, SPD_BTN_COLOR);
@@ -2439,6 +2456,7 @@ void Display::update_playback_speed(const int playback_speed_level) {
 void Display::begin_input_frame() {
   seek_relative_ = 0.0F;
   seek_from_start_ = false;
+  seek_to_start_ = false;
   frame_buffer_offset_delta_ = 0;
   frame_navigation_delta_ = 0;
   shift_left_frames_ = 0;
@@ -2558,9 +2576,10 @@ void Display::handle_event(const SDL_Event& event) {
     case SDL_MOUSEMOTION:
       SDL_GetMouseState(&mouse_x_, &mouse_y_);
 
-      // 进度条拖拽：实时 seek
+      // 进度条拖拽：实时 seek（用 drawable 坐标保证 HiDPI 精度）
       if (is_seeking_drag_ && duration_ > 0) {
-        const float ratio = std::max(0.0F, std::min(1.0F, static_cast<float>(mouse_x_) / static_cast<float>(window_width_)));
+        const float drawable_x = static_cast<float>(mouse_x_) * drawable_to_window_width_factor_;
+        const float ratio = std::max(0.0F, std::min(1.0F, drawable_x / static_cast<float>(drawable_width_)));
         seek_relative_ = ratio;
         seek_from_start_ = true;
         break;
@@ -2586,7 +2605,8 @@ void Display::handle_event(const SDL_Event& event) {
         // 进度条点击/拖拽开始
         if (SDL_PointInRect(&click_pt, &seek_bar_rect_)) {
           is_seeking_drag_ = true;
-          const float ratio = std::max(0.0F, std::min(1.0F, static_cast<float>(mouse_x_) / static_cast<float>(window_width_)));
+          const float drawable_x = static_cast<float>(mouse_x_) * drawable_to_window_width_factor_;
+          const float ratio = std::max(0.0F, std::min(1.0F, drawable_x / static_cast<float>(drawable_width_)));
           seek_relative_ = ratio;
           seek_from_start_ = true;
           break;
@@ -2631,6 +2651,16 @@ void Display::handle_event(const SDL_Event& event) {
         }
         if (SDL_PointInRect(&click_pt, &btn_faster_)) {
           update_playback_speed(playback_speed_level_ + 1);
+          tick_playback_ = true;
+          break;
+        }
+        // 从头播放按钮
+        if (SDL_PointInRect(&click_pt, &btn_restart_)) {
+          seek_to_start_ = true;   // 专用 flag，避免 ratio=0 被 combined_seek==0 跳过
+          seek_relative_ = 0.0F;
+          seek_from_start_ = true;
+          play_ = true;
+          buffer_play_loop_mode_ = Loop::OFF;
           tick_playback_ = true;
           break;
         }
@@ -2746,6 +2776,10 @@ bool Display::get_swap_left_right() const {
 
 float Display::get_seek_relative() const {
   return seek_relative_;
+}
+
+bool Display::get_seek_to_start() const {
+  return seek_to_start_;
 }
 
 bool Display::get_seek_from_start() const {
