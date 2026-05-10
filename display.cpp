@@ -2592,27 +2592,6 @@ void Display::handle_event(const SDL_Event& event) {
 #endif
       };
 
-      // Handle CTRL+SHIFT+1..0 for direct right video selection
-      if ((keymod & KMOD_CTRL) && (keymod & KMOD_SHIFT)) {
-        size_t target_index = SIZE_MAX;
-
-        if (keycode >= SDLK_1 && keycode <= SDLK_9) {
-          target_index = keycode - SDLK_1;
-        } else if (keycode >= SDLK_KP_1 && keycode <= SDLK_KP_9) {
-          target_index = keycode - SDLK_KP_1;
-        } else if ((keycode == SDLK_KP_0) || (keycode == SDLK_0)) {
-          target_index = 9;
-        }
-
-        if (target_index != SIZE_MAX) {
-          if (target_index < num_right_videos_) {
-            active_right_index_ = target_index;
-            std::cout << string_sprintf("Active right video: %d/%d", active_right_index_ + 1, num_right_videos_) << std::endl;
-          }
-          break;
-        }
-      }
-
       switch (keycode) {
         case SDLK_h:
           show_help_ = !show_help_;
@@ -2625,31 +2604,9 @@ void Display::handle_event(const SDL_Event& event) {
           buffer_play_loop_mode_ = Loop::OFF;
           tick_playback_ = play_;
           break;
-        case SDLK_COMMA:
-        case SDLK_KP_COMMA:
-          set_buffer_play_loop_mode(buffer_play_loop_mode_ != Loop::PINGPONG ? Loop::PINGPONG : Loop::OFF);
-          break;
-        case SDLK_PERIOD:
-          set_buffer_play_loop_mode(buffer_play_loop_mode_ != Loop::FORWARDONLY ? Loop::FORWARDONLY : Loop::OFF);
-          break;
-        case SDLK_1:
-        case SDLK_KP_1:
-          show_left_ = !show_left_;
-          break;
-        case SDLK_2:
-        case SDLK_KP_2:
-          show_right_ = !show_right_;
-          break;
         case SDLK_3:
         case SDLK_KP_3:
           show_hud_ = !show_hud_;
-          break;
-        case SDLK_0:
-        case SDLK_KP_0:
-          subtraction_mode_ = !subtraction_mode_;
-          break;
-        case SDLK_z:
-          zoom_left_ = true;
           break;
         case SDLK_c: {
           if (is_clipboard_mod_pressed()) {
@@ -2659,8 +2616,6 @@ void Display::handle_event(const SDL_Event& event) {
             SDL_SetClipboardText(previous_left_frame_secs_str.c_str());
 
             std::cout << "Copied to clipboard: " << previous_left_frame_secs_str << std::endl;
-          } else {
-            zoom_right_ = true;
           }
           break;
         }
@@ -2693,72 +2648,6 @@ void Display::handle_event(const SDL_Event& event) {
           }
           break;
         }
-        case SDLK_a:
-          if (keymod & KMOD_SHIFT) {
-            frame_navigation_delta_--;
-          } else {
-            frame_buffer_offset_delta_++;
-          }
-          break;
-        case SDLK_d:
-          if (keymod & KMOD_SHIFT) {
-            frame_navigation_delta_++;
-          } else {
-            frame_buffer_offset_delta_--;
-          }
-          break;
-        case SDLK_i:
-          fast_input_alignment_ = !fast_input_alignment_;
-          std::cout << "Input alignment resizing filter set to '" << (fast_input_alignment_ ? "BILINEAR (fast)" : "BICUBIC (high-quality)") << "' (takes effect for the next decoded frame)" << std::endl;
-          break;
-        case SDLK_t:
-          bilinear_texture_filtering_ = !bilinear_texture_filtering_;
-          std::cout << "Video texture filter set to '" << (bilinear_texture_filtering_ ? "BILINEAR (forced)" : "AUTO (nearest when upscaling, linear when downscaling)") << "'" << std::endl;
-          break;
-        case SDLK_s: {
-          swap_left_right_ = !swap_left_right_;
-          refresh_display_side_mapping();
-          break;
-        }
-
-        case SDLK_p:
-          print_mouse_position_and_color_ = mouse_is_inside_window_;
-          break;
-        case SDLK_TAB:
-          if (keymod & KMOD_SHIFT) {
-            active_right_index_ = (active_right_index_ + num_right_videos_ - 1) % num_right_videos_;
-          } else {
-            active_right_index_ = (active_right_index_ + 1) % num_right_videos_;
-          }
-          std::cout << string_sprintf("Active right video: %d/%d", active_right_index_ + 1, num_right_videos_) << std::endl;
-          break;
-        case SDLK_m:
-          print_image_similarity_metrics_ = true;
-          break;
-        case SDLK_4:
-        case SDLK_KP_4:
-          update_zoom_factor_and_move_offset(std::min(video_to_window_width_factor_ / drawable_to_window_width_factor_, video_to_window_height_factor_ / drawable_to_window_height_factor_));
-          break;
-        case SDLK_5:
-        case SDLK_KP_5:
-          update_zoom_factor_and_move_offset(0.5F);
-          break;
-        case SDLK_6:
-        case SDLK_KP_6:
-          update_zoom_factor_and_move_offset(1.0F);
-          break;
-        case SDLK_7:
-        case SDLK_KP_7:
-          update_zoom_factor_and_move_offset(2.0F);
-          break;
-        case SDLK_8:
-        case SDLK_KP_8:
-          update_zoom_factor_and_move_offset(4.0F);
-          break;
-        case SDLK_9:
-        case SDLK_KP_9:
-          update_zoom_factor_and_move_offset(8.0F);
-          break;
         case SDLK_r:
           update_zoom_factor(1.0F);
           move_offset_ = Vector2D(0.0F, 0.0F);
@@ -2767,20 +2656,11 @@ void Display::handle_event(const SDL_Event& event) {
         case SDLK_LEFT:
           seek_relative_ -= 1.0F;
           break;
-        case SDLK_DOWN:
-          seek_relative_ -= 10.0F;
-          break;
         case SDLK_PAGEDOWN:
           seek_relative_ -= 600.0F;
           break;
         case SDLK_RIGHT:
           seek_relative_ += 1.0F;
-          break;
-        case SDLK_UP:
-          seek_relative_ += 10.0F;
-          break;
-        case SDLK_PAGEUP:
-          seek_relative_ += 600.0F;
           break;
         case SDLK_j:
           update_playback_speed(playback_speed_level_ - 1);
@@ -2790,42 +2670,9 @@ void Display::handle_event(const SDL_Event& event) {
           update_playback_speed(playback_speed_level_ + 1);
           tick_playback_ = true;
           break;
-        case SDLK_x:
-          show_fps_ = true;
-          break;
-
-        case SDLK_y:
-          // Cycle through subtraction modes
-          switch (diff_mode_) {
-            case DiffMode::LegacyAbs:
-              diff_mode_ = DiffMode::AbsLinear;
-              break;
-            case DiffMode::AbsLinear:
-              diff_mode_ = DiffMode::AbsSqrt;
-              break;
-            case DiffMode::AbsSqrt:
-              diff_mode_ = DiffMode::SignedDiverging;
-              break;
-            case DiffMode::SignedDiverging:
-              diff_mode_ = DiffMode::LegacyAbs;
-              break;
-          }
-          std::cout << "Subtraction mode set to '";
-          switch (diff_mode_) {
-            case DiffMode::LegacyAbs:
-              std::cout << "ABSOLUTE LINEAR (FIXED GAIN)";
-              break;
-            case DiffMode::AbsLinear:
-              std::cout << "ABSOLUTE LINEAR (ADAPTIVE)";
-              break;
-            case DiffMode::AbsSqrt:
-              std::cout << "ABSOLUTE SQUARE ROOT";
-              break;
-            case DiffMode::SignedDiverging:
-              std::cout << "SIGNED DIVERGING";
-              break;
-          }
-          std::cout << "'" << std::endl;
+        case SDLK_0:
+        case SDLK_KP_0:
+          subtraction_mode_ = !subtraction_mode_;
           break;
         case SDLK_u:
           diff_luma_only_ = !diff_luma_only_;
@@ -2837,17 +2684,6 @@ void Display::handle_event(const SDL_Event& event) {
       break;
     }
     case SDL_KEYUP:
-      switch (event_.key.keysym.sym) {
-        case SDLK_z:
-          zoom_left_ = false;
-          break;
-        case SDLK_c:
-          zoom_right_ = false;
-          break;
-        case SDLK_x:
-          show_fps_ = false;
-          break;
-      }
       break;
     case SDL_QUIT:
       quit_ = true;

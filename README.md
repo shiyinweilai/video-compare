@@ -175,46 +175,14 @@ see all supported options.
 - H: Toggle on-screen help text for controls
 - V: Toggle video info overlay
 - Space: Toggle play/pause
-- Comma `,`: Toggle bidirectional in-buffer loop/pause
-- Period `.`: Toggle forward-only in-buffer loop/pause
 - Escape: Quit
-- Down arrow: Seek 15 seconds backward
 - Left arrow: Seek 1 second backward
 - Page down: Seek 600 seconds backward
-- Up arrow: Seek 15 seconds forward
 - Right arrow: Seek 1 second forward
-- Page up: Seek 600 seconds forward
 - J: Reduce playback speed
 - L: Increase playback speed
-- I: Toggle fast/high-quality resizing for input alignment
-- T: Toggle nearest-neighbor/bilinear video texture filtering
-- S: Swap left and right video
-- A: Move to the previous frame in the buffer
-- D: Move to the next frame in the buffer
-- F: Save both frames and the on-screen content as PNG images
-- P: Print mouse position and pixel value under cursor to console
-- M: Print image similarity metrics to console
-- Z: Magnify area around cursor (result shown in lower left corner)
-- C: Magnify area around cursor (result shown in lower right corner)
 - R: Re-center and reset zoom to 100% (x1)
-- 1: Toggle hide/show left video
-- 2: Toggle hide/show right video
 - 3: Toggle hide/show HUD
-- 4: Zoom to 1:1 pixels
-- 5: Zoom 50% (x0.5)
-- 6: Zoom 100% (x1)
-- 7: Zoom 200% (x2)
-- 8: Zoom 400% (x4)
-- 9: Zoom 800% (x8)
-- 0: Toggle video/subtraction mode
-- F1: Toggle Histogram window
-- F2: Toggle Vectorscope window
-- F3: Toggle Waveform window
-- Tab: Cycle through right videos
-- Plus `+`: Time-shift right video 1 frame forward
-- Minus `-`: Time-shift right video 1 frame backward
-- X: Show the current video frame and UI update rates (in FPS)
-- Y: Cycle through subtraction modes
 - U: Toggle luminance-only subtraction mode
 
 Move the mouse horizontally to adjust the movable slider position.
@@ -226,19 +194,9 @@ Left-click the mouse to perform a time seek based on the horizontal position of 
 mouse cursor relative to the window width (the target position is shown in the lower
 right corner).
 
-**Hold** `Shift` while pressing `D` to decode and move to the next frame.
-
-**Hold** `Ctrl` while time-shifting with `+`/`-` for faster increments/decrements of 10 frames
-per keystroke. Similarly, **hold** `Alt` for even larger time-shifts of 100 frames.
-
 Use `Ctrl+C` (Windows/Linux) or `Cmd+C` (macOS) to copy the current timestamp of the left video
 to the clipboard, and `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) to paste a timestamp from the
 clipboard and seek to that position.
-
-Use `Shift+F` to select a region; cutouts from both frames and their concatenation will be saved
-as PNGs.
-
-**Hold** `Ctrl+Shift` while pressing `1..0` to switch directly to right video 1–10.
 
 ## Build
 
